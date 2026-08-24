@@ -162,6 +162,29 @@
 
   .empty-hint{ color:var(--text-muted); font-size:12.5px; text-align:center; padding:14px 4px; }
 
+  /* stats table */
+  .stats-table{ width:100%; border-collapse:collapse; font-size:12.5px; }
+  .stats-table th, .stats-table td{ padding:8px 6px; text-align:left; border-bottom:1px solid var(--line); }
+  .stats-table th{ color:var(--text-muted); font-weight:700; text-transform:uppercase; font-size:10.5px; letter-spacing:.5px; }
+  .stats-table th.num, .stats-table td.num{ text-align:right; }
+  .stats-table tr:last-child td{ border-bottom:none; }
+
+  /* history by date */
+  .history-date-group{
+    margin-bottom:10px; border:1px solid var(--line); border-radius:10px; overflow:hidden; background:var(--surface-2);
+  }
+  .history-date-group:last-child{ margin-bottom:0; }
+  .history-date-group summary{
+    cursor:pointer; padding:10px 12px; font-weight:700; font-size:13px;
+    display:flex; justify-content:space-between; align-items:center; list-style:none;
+  }
+  .history-date-group summary::-webkit-details-marker{ display:none; }
+  .history-date-group summary .count-badge{ font-size:11px; color:var(--text-muted); font-weight:600; }
+  .history-table{ width:100%; border-collapse:collapse; font-size:12px; background:var(--surface); }
+  .history-table th, .history-table td{ padding:7px 10px; text-align:left; border-top:1px solid var(--line); }
+  .history-table th{ color:var(--text-muted); font-weight:700; text-transform:uppercase; font-size:10px; }
+  .history-table th.num, .history-table td.num{ text-align:right; font-variant-numeric: tabular-nums; }
+
   /* modal */
   #assignModal{
     position:fixed; inset:0; background:rgba(10,12,13,.78); backdrop-filter:blur(3px);
@@ -291,12 +314,31 @@
     </div>
   </div>
 
+  <!-- STATS -->
+  <div class="card">
+    <h2><span class="dot"></span>สถิติรายบุคคล</h2>
+    <table class="stats-table" id="statsTable" style="display:none;">
+      <thead>
+        <tr><th>นักกีฬา</th><th class="num">รอบ</th><th class="num">เร็วที่สุด</th><th class="num">เฉลี่ย</th></tr>
+      </thead>
+      <tbody id="statsBody"></tbody>
+    </table>
+    <div class="empty-hint" id="statsEmptyHint">ยังไม่มีข้อมูลรอบวิ่ง</div>
+  </div>
+
   <!-- LOG -->
   <div class="card">
     <h2 class="row"><span><span class="dot"></span>บันทึกการนับรอบ</span>
       <button class="btn-ghost btn-sm" id="exportBtn">ส่งออก CSV</button>
     </h2>
     <div id="logList"><div class="log-empty">ยังไม่มีการนับรอบ</div></div>
+  </div>
+
+  <!-- HISTORY BY DATE -->
+  <div class="card">
+    <h2><span class="dot"></span>ประวัติการวิ่ง (ตามวันที่)</h2>
+    <div id="historyByDate"></div>
+    <div class="empty-hint" id="historyEmptyHint">ยังไม่มีประวัติ</div>
   </div>
 
   <footer>วิดีโอประมวลผลในเครื่องด้วย AI ตรวจจับคน (โหลดโมเดลครั้งแรกผ่านอินเทอร์เน็ต ~7MB แล้วทำงานในเครื่องหลังจากนั้น) ไม่มีการอัปโหลดวิดีโอ — มีเพียงข้อมูลรอบ/รูปถ่ายที่ sync ขึ้น Supabase</footer>

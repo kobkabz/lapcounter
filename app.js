@@ -541,8 +541,41 @@
     athleteListEl.querySelectorAll('.btn-del').forEach(b=>{
       b.addEventListener('click', ()=> removeAthlete(b.dataset.id));
     });
+    renderStats();
   }
   function escapeHtml(s){ const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
+
+  function renderStats(){
+    const statsTable = document.getElementById('statsTable');
+    const statsBody = document.getElementById('statsBody');
+    const statsEmptyHint = document.getElementById('statsEmptyHint');
+    if(!athletes.length){
+      statsTable.style.display = 'none';
+      statsEmptyHint.style.display = 'block';
+      return;
+    }
+    statsTable.style.display = '';
+    statsEmptyHint.style.display = 'none';
+    statsBody.innerHTML = athletes.map(a=>{
+      if(!a.laps.length){
+        return `<tr>
+          <td>${escapeHtml(a.name)}</td>
+          <td class="num">0</td>
+          <td class="num">—</td>
+          <td class="num">—</td>
+        </tr>`;
+      }
+      const splits = a.laps.map(l=>l.split);
+      const fastest = Math.min.apply(null, splits);
+      const avg = splits.reduce((s,x)=>s+x,0) / splits.length;
+      return `<tr>
+        <td>${escapeHtml(a.name)}</td>
+        <td class="num">${a.laps.length}</td>
+        <td class="num" style="color:var(--lane-green)">${fmtTime(fastest)}</td>
+        <td class="num">${fmtTime(avg)}</td>
+      </tr>`;
+    }).join('');
+  }
 
   // ---------- auto trigger -> assign ----------
   function triggerLap(source, capture){
@@ -641,6 +674,53 @@
         if(entry && entry.photo) openLightbox(entry);
       });
     });
+    renderHistoryByDate();
+  }
+
+  function renderHistoryByDate(){
+    const wrap = document.getElementById('historyByDate');
+    const emptyHint = document.getElementById('historyEmptyHint');
+    if(!logEntries.length){
+      wrap.innerHTML = '';
+      emptyHint.style.display = 'block';
+      return;
+    }
+    emptyHint.style.display = 'none';
+
+    const groups = {}; // sortKey (yyyy-mm-dd) -> { label, items:[] }
+    logEntries.forEach(e=>{
+      const d = (e.wallTime instanceof Date) ? e.wallTime : new Date(e.wallTime);
+      const sortKey = d.toISOString().slice(0,10);
+      if(!groups[sortKey]){
+        groups[sortKey] = {
+          label: d.toLocaleDateString('th-TH', { year:'numeric', month:'long', day:'numeric' }),
+          items: []
+        };
+      }
+      groups[sortKey].items.push(e);
+    });
+    const sortedKeys = Object.keys(groups).sort().reverse();
+
+    wrap.innerHTML = sortedKeys.map((k, idx)=>{
+      const g = groups[k];
+      const rows = g.items.map(e=>{
+        const d = (e.wallTime instanceof Date) ? e.wallTime : new Date(e.wallTime);
+        const wt = fmtWallTime(d);
+        return `<tr>
+          <td>${wt}</td>
+          <td>${escapeHtml(e.athleteName)}</td>
+          <td class="num">${e.lapNo!=='-' ? e.lapNo : '-'}</td>
+          <td class="num">${e.split ? fmtTime(e.split) : '-'}</td>
+        </tr>`;
+      }).join('');
+      return `<details class="history-date-group" ${idx===0 ? 'open' : ''}>
+        <summary><span>${g.label}</span><span class="count-badge">${g.items.length} รอบ</span></summary>
+        <table class="history-table">
+          <thead><tr><th>เวลา</th><th>นักกีฬา</th><th class="num">รอบที่</th><th class="num">เวลาต่อรอบ</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </details>`;
+    }).join('');
   }
 
   const lightbox = document.getElementById('lightbox');
