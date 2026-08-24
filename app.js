@@ -47,6 +47,18 @@
   let wasAbove = false;
   let procW = 160, procH = 90;
 
+  // AI person-detection state
+  let cocoModel = null;
+  let modelReady = false, modelLoading = false, modelFailed = false;
+  let isDetecting = false;
+  let lastPeople = []; // last frame's detected person boxes, in video pixel space
+  const modelStatusEl = document.getElementById('modelStatus');
+  function setModelStatus(msg){
+    if(!msg){ modelStatusEl.style.display = 'none'; return; }
+    modelStatusEl.textContent = msg;
+    modelStatusEl.style.display = 'block';
+  }
+
   const COLORS = ["#ff4438","#3ddc84","#ffb020","#4ea1ff","#c78bff","#ff7ab8","#7fffd4","#ffd166"];
 
   // ---------- elements ----------
@@ -91,6 +103,23 @@
   }
   function fmtWallTime(date){
     return date.toTimeString().slice(0,8);
+  }
+
+  async function loadModel(){
+    modelLoading = true;
+    setModelStatus("กำลังโหลดโมเดล AI ตรวจจับคน (ครั้งแรกอาจใช้เวลาสักครู่)...");
+    try{
+      cocoModel = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
+      modelReady = true;
+      modelLoading = false;
+      setModelStatus("");
+      showToast("โหลด AI ตรวจจับคนสำเร็จ — ระบบจะจับเฉพาะคนที่วิ่งผ่านเส้น");
+    }catch(e){
+      console.error('โหลดโมเดล AI ไม่สำเร็จ:', e);
+      modelFailed = true;
+      modelLoading = false;
+      setModelStatus("โหลด AI ตรวจจับคนไม่สำเร็จ — สลับไปใช้การจับความเคลื่อนไหวทั่วไปแทน");
+    }
   }
 
   // ---------- helpers ----------
@@ -216,6 +245,7 @@
       meterWrap.style.display = 'block';
       resizeOverlay();
       requestAnimationFrame(processLoop);
+      if(!modelReady && !modelLoading && !modelFailed) loadModel();
     }catch(err){
       showToast("เปิดกล้องไม่ได้: อนุญาตสิทธิ์กล้องในเบราว์เซอร์ก่อน");
     }
@@ -232,6 +262,8 @@
     cdRow.style.display = 'none';
     meterWrap.style.display = 'none';
     prevFrame = null;
+    lastPeople = [];
+    wasAbove = false;
   }
   camBtn.addEventListener('click', startCamera);
   switchBtn.addEventListener('click', async ()=>{
@@ -260,16 +292,68 @@
   let lastProcTime = 0;
   function processLoop(ts){
     if(stream){
-      if(!lastProcTime || ts - lastProcTime > 66){ // ~15fps
+      const interval = modelReady ? 280 : 66; // AI detection is heavier, throttle harder
+      if(!lastProcTime || ts - lastProcTime > interval){
         lastProcTime = ts;
-        try{ analyzeFrame(); }catch(e){}
+        if(modelReady){ detectPeople(); }
+        else if(modelFailed){ try{ analyzeFrameMotion(); }catch(e){} }
       }
       drawOverlay();
     }
     requestAnimationFrame(processLoop);
   }
 
-  function analyzeFrame(){
+  function getCoverTransform(){
+    const vw = video.videoWidth, vh = video.videoHeight;
+    const dw = overlay.width, dh = overlay.height;
+    if(!vw || !vh || !dw || !dh) return null;
+    const scale = Math.max(dw/vw, dh/vh);
+    return { scale, offsetX: (dw - vw*scale)/2, offsetY: (dh - vh*scale)/2, vw, vh };
+  }
+
+  async function detectPeople(){
+    if(isDetecting || !cocoModel || video.readyState < 2) return;
+    isDetecting = true;
+    try{
+      const minScore = Number(sensSlider.value)/100;
+      const predictions = await cocoModel.detect(video, 10, minScore);
+      const people = predictions.filter(p => p.class === 'person');
+      lastPeople = people;
+
+      const vh = video.videoHeight || procH;
+      const linePct = posSlider.value/100;
+      const bandH = Math.max(20, vh*0.08);
+      const y0 = linePct*vh - bandH/2, y1 = linePct*vh + bandH/2;
+
+      let inZoneNow = false, bestScore = 0;
+      people.forEach(p=>{
+        const [, y, , h] = p.bbox;
+        const centerY = y + h/2;
+        if(centerY >= y0 && centerY <= y1) inZoneNow = true;
+        if(p.score > bestScore) bestScore = p.score;
+      });
+
+      meterFill.style.width = Math.min(100, bestScore*100) + "%";
+      meterThresh.style.left = Math.min(97, minScore*100) + "%";
+
+      const now = performance.now();
+      const cooldownMs = Number(cdSlider.value)*100;
+      if(inZoneNow && !wasAbove && (now-lastTriggerTime) > cooldownMs){
+        lastTriggerTime = now;
+        if(autoMode){
+          const capture = { photo: capturePhoto(), wallTime: new Date() };
+          triggerLap('auto-person', capture);
+        }
+        flashLine = true; flashLineTime = now;
+      }
+      wasAbove = inZoneNow;
+    }catch(e){
+      console.error('ตรวจจับคนไม่สำเร็จในเฟรมนี้:', e);
+    }
+    isDetecting = false;
+  }
+
+  function analyzeFrameMotion(){
     if(video.readyState < 2) return;
     procCtx.drawImage(video, 0, 0, procW, procH);
     const linePct = posSlider.value/100;
@@ -315,8 +399,28 @@
     if(!w||!h) return;
     ctx.clearRect(0,0,w,h);
     const linePct = posSlider.value/100;
-    const y = linePct*h;
     const flashActive = flashLine && (performance.now()-flashLineTime < 350);
+
+    // draw AI-detected person boxes (mapped from video pixel space to display space)
+    if(modelReady && lastPeople.length){
+      const t = getCoverTransform();
+      if(t){
+        lastPeople.forEach(p=>{
+          const [x,y,bw,bh] = p.bbox;
+          const dx = x*t.scale + t.offsetX, dy = y*t.scale + t.offsetY;
+          const dw2 = bw*t.scale, dh2 = bh*t.scale;
+          ctx.strokeStyle = 'rgba(255,68,56,0.85)';
+          ctx.lineWidth = 2;
+          ctx.setLineDash([]);
+          ctx.strokeRect(dx, dy, dw2, dh2);
+          ctx.font = '11px sans-serif';
+          ctx.fillStyle = 'rgba(255,68,56,0.85)';
+          ctx.fillText('คน ' + Math.round(p.score*100) + '%', dx+3, Math.max(11, dy-4));
+        });
+      }
+    }
+
+    const y = linePct*h;
     ctx.strokeStyle = flashActive ? '#3ddc84' : 'rgba(255,68,56,0.9)';
     ctx.lineWidth = flashActive ? 5 : 2.5;
     ctx.setLineDash([10,8]);
