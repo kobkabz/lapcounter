@@ -149,8 +149,8 @@
     font-size:30px; font-weight:800; min-width:46px; text-align:center; flex:none;
   }
   .athlete .count-label{ font-size:9.5px; color:var(--text-muted); text-align:center; text-transform:uppercase; letter-spacing:1px; margin-top:-2px; }
-  .athlete .actions{ display:flex; flex-direction:column; gap:4px; flex:none; }
-  .athlete .actions button{ padding:4px 8px; font-size:15px; line-height:1; width:30px; height:26px; }
+  .athlete .actions{ display:grid; grid-template-columns:repeat(2,1fr); gap:4px; flex:none; }
+  .athlete .actions button{ padding:4px 6px; font-size:14px; line-height:1; width:30px; height:26px; }
 
   .add-athlete{ display:flex; gap:8px; margin-top:12px; }
   .add-athlete input{
@@ -235,6 +235,23 @@
   #lightbox .lb-caption{ margin-top:10px; text-align:center; font-size:13px; color:var(--lane-white); }
   #lightbox .lb-caption span{ color:var(--text-muted); font-size:11.5px; display:block; margin-top:2px; }
   #lightbox .lb-close{ margin:14px auto 0; display:block; background:var(--surface-2); border:1px solid var(--line); color:var(--lane-white); }
+
+  #faceModal{
+    position:fixed; inset:0; background:rgba(10,12,13,.78); backdrop-filter:blur(3px);
+    display:none; align-items:flex-end; justify-content:center; z-index:110;
+  }
+  #faceModal.show{ display:flex; }
+  #faceModal .modal-sheet{ max-height:85vh; overflow-y:auto; }
+  .face-thumb-grid{ display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin-top:8px; }
+  .face-thumb{ position:relative; }
+  .face-thumb img, .face-thumb .thumb-empty{
+    width:100%; aspect-ratio:1; object-fit:cover; border-radius:8px; border:1px solid var(--line);
+    background:var(--surface-3); display:flex; align-items:center; justify-content:center; font-size:22px;
+  }
+  .face-thumb button.del{
+    position:absolute; top:4px; right:4px; background:rgba(0,0,0,.65); color:#fff; border:none;
+    border-radius:50%; width:22px; height:22px; font-size:12px; padding:0; line-height:1;
+  }
 
   .toast{
     position:fixed; left:50%; top:14px; transform:translateX(-50%) translateY(-60px);
@@ -369,6 +386,19 @@
     <img id="lbImg" src="">
     <div class="lb-caption" id="lbCaption"></div>
     <button class="lb-close btn-ghost" id="lbClose">ปิด</button>
+  </div>
+</div>
+
+<!-- FACE MANAGE MODAL -->
+<div id="faceModal">
+  <div class="modal-sheet">
+    <h3 id="faceModalTitle">จัดการใบหน้า</h3>
+    <p>ตัวอย่างใบหน้าที่ลงทะเบียนไว้ — กด ✕ เพื่อลบตัวอย่างที่ไม่ชัด/ไม่ตรง</p>
+    <div class="face-thumb-grid" id="faceModalGrid"></div>
+    <div class="cam-controls" style="margin-top:14px;">
+      <button class="btn-primary btn-block" id="faceCaptureBtn">📷 ถ่ายเพิ่ม</button>
+      <button class="btn-ghost" id="faceModalCloseBtn">ปิด</button>
+    </div>
   </div>
 </div>
 

@@ -179,9 +179,9 @@
     }catch(e){ console.error('ลบนักกีฬาบน Supabase ไม่สำเร็จ:', e); }
   }
   async function persistLapEntry({ athleteId, athleteName, lapNo, elapsedMs, splitMs, wallTime, source, photo }){
-    if(!supabaseReady) return;
+    if(!supabaseReady) return null;
     try{
-      const { error } = await sb.from('laps').insert({
+      const { data, error } = await sb.from('laps').insert({
         session_id: sessionId,
         athlete_id: athleteId || null,
         athlete_name: athleteName,
@@ -191,11 +191,22 @@
         wall_time: wallTime.toISOString(),
         source: source || null,
         photo: photo || null
-      });
+      }).select('id').single();
       if(error) throw error;
+      return data ? data.id : null;
     }catch(e){
       console.error('บันทึกรอบไป Supabase ไม่สำเร็จ:', e);
       showToast('บันทึกรอบไป Supabase ไม่สำเร็จ');
+      return null;
+    }
+  }
+  async function persistDeleteLap(id){
+    if(!supabaseReady || !id) return;
+    try{
+      const { error } = await sb.from('laps').delete().eq('id', id);
+      if(error) throw error;
+    }catch(e){
+      console.error('ลบรอบบน Supabase ไม่สำเร็จ:', e);
     }
   }
   async function persistClearLaps(){
@@ -221,12 +232,13 @@
       athletes = athRows.map(r => ({ id:r.id, name:r.name, color:r.color, count:0, laps:[], faceDescriptors: r.face_descriptors || [] }));
       logEntries = lapRows.map(r => ({
         time: r.elapsed_ms, athleteName: r.athlete_name, lapNo: (r.lap_no==null ? '-' : r.lap_no),
-        split: r.split_ms, source: r.source, wallTime: new Date(r.wall_time), photo: r.photo
+        split: r.split_ms, source: r.source, wallTime: new Date(r.wall_time), photo: r.photo, dbId: r.id,
+        confirmedFace: !!(r.source && r.source.includes('face'))
       }));
       lapRows.forEach(r=>{
         if(!r.athlete_id) return;
         const a = athletes.find(x=>x.id===r.athlete_id);
-        if(a){ a.count++; a.laps.push({ t:r.elapsed_ms, split:r.split_ms, wallTime:new Date(r.wall_time), photo:r.photo }); }
+        if(a){ a.count++; a.laps.push({ t:r.elapsed_ms, split:r.split_ms, wallTime:new Date(r.wall_time), photo:r.photo, dbId:r.id }); }
       });
       if(logEntries.length){
         sessionElapsed = Math.max.apply(null, logEntries.map(e=>e.time));
@@ -307,19 +319,24 @@
 
   let lastProcTime = 0;
   let lastFaceScanTime = 0;
+  let enrollmentInProgress = false;
   function processLoop(ts){
     if(stream){
-      // fast motion trigger — runs ~every 40ms, this is what actually counts laps (unaffected by face recognition)
-      if(!lastProcTime || ts - lastProcTime > 40){
-        lastProcTime = ts;
-        try{ analyzeFrameMotion(); }catch(e){}
-      }
-      // continuous face recognition — scans the WHOLE frame (not just the line), runs slower,
-      // never gates or delays counting. Builds a short rolling memory of "who was just seen"
-      // so identity doesn't depend on a face being visible at the exact instant of crossing.
-      if(faceApiReady && !isScanningFaces && (!lastFaceScanTime || ts - lastFaceScanTime > 450)){
-        lastFaceScanTime = ts;
-        scanFacesContinuous();
+      // การนับรอบและการสแกนหน้าทั้งหมด ทำงานเฉพาะตอนกด "เริ่มจับเวลา" แล้วเท่านั้น
+      // ระหว่างตั้งกล้อง/ลงทะเบียนใบหน้าก่อนเริ่ม จะไม่มีอะไรมาแย่งประมวลผลกับ AI จดจำใบหน้า
+      if(sessionRunning){
+        // fast motion trigger — runs ~every 40ms, this is what actually counts laps
+        if(!lastProcTime || ts - lastProcTime > 40){
+          lastProcTime = ts;
+          try{ analyzeFrameMotion(); }catch(e){}
+        }
+        // continuous face recognition — scans the WHOLE frame (not just the line), runs slower,
+        // never gates or delays counting. Skips entirely while an enrollment call is in flight
+        // to avoid contention that made things freeze.
+        if(faceApiReady && !isScanningFaces && !enrollmentInProgress && (!lastFaceScanTime || ts - lastFaceScanTime > 450)){
+          lastFaceScanTime = ts;
+          scanFacesContinuous();
+        }
       }
       drawOverlay();
     }
@@ -342,8 +359,9 @@
   function matchFace(descriptor){
     let best = null, bestDist = Infinity;
     athletes.forEach(a=>{
-      (a.faceDescriptors||[]).forEach(fd=>{
-        const dist = euclideanDistance(descriptor, fd);
+      (a.faceDescriptors||[]).forEach(raw=>{
+        const fd = normalizeFaceSample(raw);
+        const dist = euclideanDistance(descriptor, fd.descriptor);
         if(dist < bestDist){ bestDist = dist; best = a; }
       });
     });
@@ -401,11 +419,20 @@
     });
   }
 
+  // แปลงตัวอย่างใบหน้าให้เป็นรูปแบบเดียวกันเสมอ {descriptor, photo}
+  // (รองรับข้อมูลเก่าที่เคยเก็บเป็น array ดิบๆ ก่อนมีฟีเจอร์เก็บรูปตัวอย่าง)
+  function normalizeFaceSample(s){
+    if(Array.isArray(s)) return { descriptor: s, photo: null };
+    return s;
+  }
+
   // ลงทะเบียนใบหน้าให้นักกีฬาคนหนึ่ง จากเฟรมกล้องปัจจุบัน (ต้องเห็นหน้าชัดๆ ใกล้ๆ)
   async function tryEnrollFace(a, opts){
     const silent = opts && opts.silent;
     if(!faceApiReady){ if(!silent) showToast("AI จดจำใบหน้ายังโหลดไม่เสร็จ ลองอีกครั้งสักครู่"); return; }
     if(!stream || video.readyState < 2){ if(!silent) showToast("เปิดกล้องก่อนถึงจะลงทะเบียนใบหน้าได้"); return; }
+    if(enrollmentInProgress){ if(!silent) showToast("กำลังลงทะเบียนอยู่ รอสักครู่"); return; }
+    enrollmentInProgress = true;
     try{
       const result = await faceapi
         .detectSingleFace(video, new faceapi.TinyFaceDetectorOptions({ inputSize:320, scoreThreshold:0.5 }))
@@ -415,17 +442,70 @@
         if(!silent) showToast("ไม่เจอใบหน้าชัดเจน — ให้ " + a.name + " หันหน้าเข้ากล้องใกล้ๆ แล้วลองใหม่");
         return;
       }
+      const photo = capturePhoto();
       a.faceDescriptors = a.faceDescriptors || [];
-      a.faceDescriptors.push(Array.from(result.descriptor));
-      if(a.faceDescriptors.length > 3) a.faceDescriptors = a.faceDescriptors.slice(-3); // เก็บล่าสุด 3 ตัวอย่าง
+      a.faceDescriptors.push({ descriptor: Array.from(result.descriptor), photo });
+      if(a.faceDescriptors.length > 5) a.faceDescriptors = a.faceDescriptors.slice(-5); // กันสะสมมากเกินไป (ลบเองได้ในหน้าจัดการใบหน้า)
       renderAthletes();
       persistUpdateAthleteFace(a);
       showToast("ลงทะเบียนใบหน้า " + a.name + " สำเร็จ (" + a.faceDescriptors.length + " ตัวอย่าง)");
     }catch(e){
       console.error('ลงทะเบียนใบหน้าไม่สำเร็จ:', e);
       if(!silent) showToast("ลงทะเบียนใบหน้าไม่สำเร็จ ลองใหม่อีกครั้ง");
+    } finally {
+      enrollmentInProgress = false;
     }
   }
+
+  // ---------- หน้าจัดการใบหน้า (ดู/ลบ/ถ่ายเพิ่ม) ----------
+  let faceModalAthleteId = null;
+  const faceModalEl = document.getElementById('faceModal');
+  const faceModalTitleEl = document.getElementById('faceModalTitle');
+  const faceModalGridEl = document.getElementById('faceModalGrid');
+
+  function openFaceModal(a){
+    faceModalAthleteId = a.id;
+    faceModalTitleEl.textContent = "จัดการใบหน้า — " + a.name;
+    renderFaceModalGrid();
+    faceModalEl.classList.add('show');
+  }
+  function closeFaceModal(){
+    faceModalEl.classList.remove('show');
+    faceModalAthleteId = null;
+  }
+  function renderFaceModalGrid(){
+    const a = athletes.find(x=>x.id===faceModalAthleteId);
+    if(!a){ faceModalGridEl.innerHTML=''; return; }
+    const samples = a.faceDescriptors || [];
+    if(!samples.length){
+      faceModalGridEl.innerHTML = '<div class="empty-hint" style="grid-column:1/-1;">ยังไม่มีตัวอย่างใบหน้า — กด "ถ่ายเพิ่ม" ด้านล่าง</div>';
+      return;
+    }
+    faceModalGridEl.innerHTML = samples.map((raw, idx)=>{
+      const s = normalizeFaceSample(raw);
+      const inner = s.photo ? `<img src="${s.photo}">` : `<div class="thumb-empty">👤</div>`;
+      return `<div class="face-thumb">${inner}<button class="del" data-idx="${idx}">✕</button></div>`;
+    }).join('');
+    faceModalGridEl.querySelectorAll('.del').forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        const a2 = athletes.find(x=>x.id===faceModalAthleteId);
+        if(!a2) return;
+        const idx = Number(btn.dataset.idx);
+        a2.faceDescriptors.splice(idx, 1);
+        renderFaceModalGrid();
+        renderAthletes();
+        persistUpdateAthleteFace(a2);
+      });
+    });
+  }
+  document.getElementById('faceCaptureBtn').addEventListener('click', async ()=>{
+    const a = athletes.find(x=>x.id===faceModalAthleteId);
+    if(!a) return;
+    await tryEnrollFace(a);
+    renderFaceModalGrid();
+  });
+  document.getElementById('faceModalCloseBtn').addEventListener('click', closeFaceModal);
+  faceModalEl.addEventListener('click', (e)=>{ if(e.target===faceModalEl) closeFaceModal(); });
 
   // เมื่อเกิดการนับรอบและมีนักกีฬาหลายคน:
   // 1) เช็คความจำล่าสุดก่อน (หน้าที่เห็นก่อน/หลังเส้นไม่กี่วินาทีก็ใช้ได้ ไม่ต้องรอเห็นหน้าตรงเส้นพอดี)
@@ -518,6 +598,19 @@
     const w = overlay.width, h = overlay.height;
     if(!w||!h) return;
     ctx.clearRect(0,0,w,h);
+
+    if(!sessionRunning){
+      // ยังไม่กด "เริ่มจับเวลา" — ไม่วาดเส้น/กรอบใดๆ เพื่อไม่ให้ตีกับตอนลงทะเบียนใบหน้า
+      ctx.fillStyle = 'rgba(0,0,0,0.35)';
+      ctx.fillRect(0, h/2-18, w, 36);
+      ctx.fillStyle = 'rgba(242,241,234,0.95)';
+      ctx.font = '13px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('กด "เริ่มจับเวลา" เพื่อเริ่มตรวจจับเส้นชัย', w/2, h/2+5);
+      ctx.textAlign = 'left';
+      return;
+    }
+
     const linePct = posSlider.value/100;
     const flashActive = flashLine && (performance.now()-flashLineTime < 350);
 
@@ -569,12 +662,20 @@
       sessionStart = performance.now();
       startBtn.textContent = "หยุดชั่วคราว";
       startBtn.classList.remove('btn-primary'); startBtn.classList.add('btn-ghost','active');
+      // เริ่มตรวจจับใหม่แบบสะอาด กันสัญญาณเก่าตอนตั้งกล้อง/ลงทะเบียนใบหน้าทำให้นับพลาดจังหวะแรก
+      prevFrame = null;
+      motionHigh = false;
+      lastProcTime = 0;
+      lastFaceScanTime = 0;
+      recentIdentifications = [];
+      lastFaceBoxes = [];
       tickTimer();
     } else {
       sessionRunning = false;
       sessionElapsed += performance.now()-sessionStart;
       startBtn.textContent = "เริ่มต่อ";
       cancelAnimationFrame(timerRAF);
+      lastFaceBoxes = [];
     }
   });
   resetBtn.addEventListener('click', async ()=>{
@@ -622,14 +723,35 @@
     const wallTime = (capture && capture.wallTime) ? capture.wallTime : new Date();
     const photo = capture ? capture.photo : null;
     a.count++;
-    a.laps.push({t, split, wallTime, photo});
-    logEntries.push({ time:t, athleteName:a.name, lapNo:a.count, split, source:sourceLabel, wallTime, photo, confirmedFace: !!(capture && capture.confirmedFace) });
+    const lapObj = {t, split, wallTime, photo, dbId:null};
+    a.laps.push(lapObj);
+    const logObj = { time:t, athleteName:a.name, lapNo:a.count, split, source:sourceLabel, wallTime, photo, confirmedFace: !!(capture && capture.confirmedFace), dbId:null };
+    logEntries.push(logObj);
     renderAthletes(a.id);
     renderLog();
     beep();
     showToast((a.name)+" — รอบที่ "+a.count);
-    persistLapEntry({ athleteId:a.id, athleteName:a.name, lapNo:a.count, elapsedMs:t, splitMs:split, wallTime, source:sourceLabel, photo });
+    persistLapEntry({ athleteId:a.id, athleteName:a.name, lapNo:a.count, elapsedMs:t, splitMs:split, wallTime, source:sourceLabel, photo })
+      .then(id => { lapObj.dbId = id; logObj.dbId = id; });
     recentIdentifications = []; // กันความจำใบหน้าเก่าถูกใช้ซ้ำกับรอบถัดไปของคนอื่น
+  }
+
+  // ลบรอบล่าสุดของนักกีฬาคนหนึ่ง (แก้รอบที่กดพลาด/นับซ้ำ)
+  function removeLastLapForAthlete(a){
+    if(!a.laps.length){ showToast(a.name + " ยังไม่มีรอบให้ลบ"); return; }
+    const removed = a.laps.pop();
+    a.count = Math.max(0, a.count - 1);
+    let idx = -1;
+    for(let i=logEntries.length-1; i>=0; i--){
+      if(logEntries[i].athleteName === a.name && logEntries[i].time === removed.t){ idx = i; break; }
+    }
+    let removedEntry = null;
+    if(idx >= 0) removedEntry = logEntries.splice(idx, 1)[0];
+    renderAthletes();
+    renderLog();
+    showToast("ลบรอบล่าสุดของ " + a.name + " แล้ว");
+    const dbId = removed.dbId || (removedEntry && removedEntry.dbId);
+    if(dbId) persistDeleteLap(dbId);
   }
 
   function renderAthletes(flashId){
@@ -654,8 +776,9 @@
           <div class="count-label">รอบ</div>
         </div>
         <div class="actions">
-          <button class="btn-ghost btn-face" data-id="${a.id}" title="ลงทะเบียน/ปรับปรุงใบหน้า">📷</button>
+          <button class="btn-ghost btn-face" data-id="${a.id}" title="จัดการใบหน้า">📷</button>
           <button class="btn-ghost btn-plus" data-id="${a.id}">+1</button>
+          <button class="btn-ghost btn-minus" data-id="${a.id}">−1</button>
           <button class="btn-ghost btn-del" data-id="${a.id}">✕</button>
         </div>`;
       athleteListEl.appendChild(el);
@@ -663,13 +786,19 @@
     athleteListEl.querySelectorAll('.btn-face').forEach(b=>{
       b.addEventListener('click', ()=>{
         const a = athletes.find(x=>x.id==b.dataset.id);
-        if(a) tryEnrollFace(a);
+        if(a) openFaceModal(a);
       });
     });
     athleteListEl.querySelectorAll('.btn-plus').forEach(b=>{
       b.addEventListener('click', ()=>{
         const a = athletes.find(x=>x.id==b.dataset.id);
         if(a) lapForAthlete(a, 'manual', { photo: capturePhoto(), wallTime: new Date() });
+      });
+    });
+    athleteListEl.querySelectorAll('.btn-minus').forEach(b=>{
+      b.addEventListener('click', ()=>{
+        const a = athletes.find(x=>x.id==b.dataset.id);
+        if(a) removeLastLapForAthlete(a);
       });
     });
     athleteListEl.querySelectorAll('.btn-del').forEach(b=>{
