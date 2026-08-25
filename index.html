@@ -5,8 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>นับรอบวิ่ง — Track Lap Counter</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
 <script src="config.js"></script>
 <style>
   :root{
@@ -162,6 +161,11 @@
 
   .empty-hint{ color:var(--text-muted); font-size:12.5px; text-align:center; padding:14px 4px; }
 
+  .face-badge{ font-size:10px; font-weight:700; }
+  .face-badge.on{ color:var(--lane-green); }
+  .face-badge.off{ color:var(--warn-amber); }
+  .athlete .actions button.btn-face{ font-size:14px; }
+
   /* stats table */
   .stats-table{ width:100%; border-collapse:collapse; font-size:12.5px; }
   .stats-table th, .stats-table td{ padding:8px 6px; text-align:left; border-bottom:1px solid var(--line); }
@@ -247,7 +251,7 @@
 <header>
   <div class="eyebrow">Stopwatch · Finish Line</div>
   <h1>นับรอบการวิ่ง</h1>
-  <div class="sub">ตั้งมือถือนิ่งให้เห็นเส้นชัย ใช้ AI ตรวจจับ "คน" ที่วิ่งผ่านเส้นโดยเฉพาะ (ไม่ใช่แค่จับความเคลื่อนไหว)</div>
+  <div class="sub">ตั้งมือถือนิ่งให้เห็นเส้นชัย ระบบจับความเคลื่อนไหวเร็ว + AI จดจำใบหน้าเพื่อระบุนักกีฬาอัตโนมัติ</div>
   <div class="sub sync-status" id="syncStatus"></div>
 </header>
 
@@ -280,12 +284,16 @@
       <input type="range" id="posSlider" min="5" max="95" value="50">
     </div>
     <div class="slider-row" id="sensRow" style="display:none">
-      <label>ความมั่นใจขั้นต่ำของ AI (%) <b id="sensVal">55</b></label>
-      <input type="range" id="sensSlider" min="30" max="90" value="55">
+      <label>ความไว (sensitivity) <b id="sensVal">18</b></label>
+      <input type="range" id="sensSlider" min="4" max="60" value="18">
     </div>
     <div class="slider-row" id="cdRow" style="display:none">
       <label>เว้นระยะกันนับซ้ำ <b id="cdVal">1.2s</b></label>
       <input type="range" id="cdSlider" min="3" max="40" value="12">
+    </div>
+    <div class="slider-row" id="faceRow" style="display:none">
+      <label>ความเข้มงวดการจดจำใบหน้า <b id="faceVal">55</b></label>
+      <input type="range" id="faceSlider" min="40" max="75" value="55">
     </div>
     <div class="meter" id="meterWrap" style="display:none">
       <div class="meter-track"><div class="meter-fill" id="meterFill"></div><div class="meter-threshold" id="meterThresh"></div></div>
