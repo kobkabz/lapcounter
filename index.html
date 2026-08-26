@@ -4,6 +4,16 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>นับรอบวิ่ง — Track Lap Counter</title>
+
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#14181a">
+<link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Lap Counter">
+
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
 <script src="config.js"></script>
@@ -108,18 +118,6 @@
     background:var(--track-red); border:3px solid var(--lane-white); cursor:pointer; margin-top:-1px;
   }
 
-  .meter{ margin-top:12px; }
-  .meter-track{
-    height:8px; border-radius:4px; background:var(--surface-3); overflow:hidden; position:relative;
-  }
-  .meter-fill{
-    height:100%; width:0%; background:linear-gradient(90deg, var(--lane-green), var(--warn-amber), var(--track-red));
-    transition:width .08s linear;
-  }
-  .meter-threshold{
-    position:absolute; top:-3px; bottom:-3px; width:2px; background:var(--lane-white); opacity:.8;
-  }
-
   /* session timer */
   .timer-display{
     font-size:44px; font-weight:800; text-align:center; letter-spacing:1px; margin:2px 0 4px;
@@ -189,12 +187,7 @@
   .history-table th{ color:var(--text-muted); font-weight:700; text-transform:uppercase; font-size:10px; }
   .history-table th.num, .history-table td.num{ text-align:right; font-variant-numeric: tabular-nums; }
 
-  /* modal */
-  #assignModal{
-    position:fixed; inset:0; background:rgba(10,12,13,.78); backdrop-filter:blur(3px);
-    display:none; align-items:flex-end; justify-content:center; z-index:100;
-  }
-  #assignModal.show{ display:flex; }
+  /* modal (shared sheet style, used by face-management modal) */
   .modal-sheet{
     background:var(--surface); border:1px solid var(--line); border-radius:16px 16px 0 0;
     width:100%; max-width:560px; padding:18px 16px 22px; animation:slideUp .18s ease;
@@ -202,10 +195,6 @@
   @keyframes slideUp{ from{ transform:translateY(20px); opacity:0;} to{ transform:translateY(0); opacity:1;} }
   .modal-sheet h3{ margin:0 0 3px; font-size:16px; font-weight:800; }
   .modal-sheet p{ margin:0 0 14px; font-size:12.5px; color:var(--text-muted); }
-  .modal-grid{ display:grid; grid-template-columns:1fr 1fr; gap:8px; }
-  .modal-grid button{ padding:14px 8px; background:var(--surface-2); border:1px solid var(--line); color:var(--lane-white); font-size:14px; }
-  .modal-timeout{ margin-top:12px; height:3px; background:var(--surface-3); border-radius:2px; overflow:hidden; }
-  .modal-timeout-fill{ height:100%; background:var(--warn-amber); width:100%; }
 
   /* log */
   #logList{ max-height:280px; overflow-y:auto; display:flex; flex-direction:column-reverse; gap:6px; }
@@ -268,15 +257,16 @@
 <header>
   <div class="eyebrow">Stopwatch · Finish Line</div>
   <h1>นับรอบการวิ่ง</h1>
-  <div class="sub">ตั้งมือถือนิ่งให้เห็นเส้นชัย ระบบจับความเคลื่อนไหวเร็ว + AI จดจำใบหน้าเพื่อระบุนักกีฬาอัตโนมัติ</div>
+  <div class="sub">ตั้งมือถือนิ่งให้เห็นตัวนักวิ่ง — AI จำหน้าแล้วนับรอบให้อัตโนมัติ ไม่ต้องมีเส้นชัย</div>
   <div class="sub sync-status" id="syncStatus"></div>
+  <button class="btn-ghost btn-sm" id="installBtn" style="display:none; margin-top:8px;">⬇️ ติดตั้งแอปลงเครื่อง</button>
 </header>
 
 <main>
 
   <!-- CAMERA -->
   <div class="card">
-    <h2><span class="dot"></span>กล้องตรวจจับเส้น</h2>
+    <h2><span class="dot"></span>กล้อง — AI จดจำใบหน้า</h2>
     <div class="viewfinder" id="viewfinder">
       <video id="video" playsinline autoplay muted></video>
       <canvas class="overlay" id="overlay"></canvas>
@@ -292,28 +282,17 @@
     <div class="cam-controls">
       <button class="btn-primary btn-block" id="camBtn">เปิดกล้อง</button>
       <button class="btn-ghost" id="switchBtn" style="display:none">สลับกล้อง</button>
-      <button class="btn-ghost" id="autoBtn" style="display:none">โหมดอัตโนมัติ: เปิด</button>
+      <button class="btn-ghost" id="autoBtn" style="display:none">นับอัตโนมัติ: เปิด</button>
     </div>
     <div class="sub" id="modelStatus" style="margin-top:8px; display:none;"></div>
 
-    <div class="slider-row" id="posRow" style="display:none">
-      <label>ตำแหน่งเส้นชัย <b id="posVal">50%</b></label>
-      <input type="range" id="posSlider" min="5" max="95" value="50">
-    </div>
-    <div class="slider-row" id="sensRow" style="display:none">
-      <label>ความไว (sensitivity) <b id="sensVal">18</b></label>
-      <input type="range" id="sensSlider" min="4" max="60" value="18">
-    </div>
     <div class="slider-row" id="cdRow" style="display:none">
-      <label>เว้นระยะกันนับซ้ำ <b id="cdVal">1.2s</b></label>
-      <input type="range" id="cdSlider" min="3" max="40" value="12">
+      <label>เว้นระยะขั้นต่ำต่อรอบ (วินาที) <b id="cdVal">8s</b></label>
+      <input type="range" id="cdSlider" min="2" max="60" value="8">
     </div>
     <div class="slider-row" id="faceRow" style="display:none">
       <label>ความเข้มงวดการจดจำใบหน้า <b id="faceVal">55</b></label>
       <input type="range" id="faceSlider" min="40" max="75" value="55">
-    </div>
-    <div class="meter" id="meterWrap" style="display:none">
-      <div class="meter-track"><div class="meter-fill" id="meterFill"></div><div class="meter-threshold" id="meterThresh"></div></div>
     </div>
   </div>
 
@@ -366,19 +345,8 @@
     <div class="empty-hint" id="historyEmptyHint">ยังไม่มีประวัติ</div>
   </div>
 
-  <footer>วิดีโอประมวลผลในเครื่องด้วย AI ตรวจจับคน (โหลดโมเดลครั้งแรกผ่านอินเทอร์เน็ต ~7MB แล้วทำงานในเครื่องหลังจากนั้น) ไม่มีการอัปโหลดวิดีโอ — มีเพียงข้อมูลรอบ/รูปถ่ายที่ sync ขึ้น Supabase</footer>
+  <footer>วิดีโอประมวลผลในเครื่องด้วย AI จดจำใบหน้า (โหลดโมเดลครั้งแรกผ่านอินเทอร์เน็ต แล้วทำงานในเครื่องหลังจากนั้น) ไม่มีการอัปโหลดวิดีโอ — มีเพียงข้อมูลรอบ/รูปถ่ายที่ sync ขึ้น Supabase</footer>
 </main>
-
-<!-- ASSIGN MODAL -->
-<div id="assignModal">
-  <div class="modal-sheet">
-    <h3>ตรวจพบการวิ่งผ่านเส้น</h3>
-    <p>ใครวิ่งผ่าน? แตะเพื่อบันทึกรอบให้คนนั้น</p>
-    <img id="modalPhoto" style="width:100%;border-radius:10px;border:1px solid var(--line);margin-bottom:12px;display:none;">
-    <div class="modal-grid" id="assignGrid"></div>
-    <div class="modal-timeout"><div class="modal-timeout-fill" id="modalTimeoutFill"></div></div>
-  </div>
-</div>
 
 <!-- LIGHTBOX -->
 <div id="lightbox">

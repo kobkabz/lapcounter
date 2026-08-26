@@ -1,0 +1,17 @@
+{
+  "name": "นับรอบวิ่ง — Track Lap Counter",
+  "short_name": "LapCounter",
+  "description": "นับรอบวิ่งอัตโนมัติด้วย AI จดจำใบหน้า สำหรับนักกีฬาและโค้ช",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#14181a",
+  "theme_color": "#14181a",
+  "lang": "th",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

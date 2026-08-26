@@ -38,17 +38,15 @@
 
   // ---------- state ----------
   let stream = null, facing = "environment";
-  let athletes = []; // {id,name,color,count,laps:[{t,split,wallTime,photo}]}
-  let logEntries = []; // {time, athleteName, lapNo, split, wallTime, photo, source}
+  let athletes = []; // {id,name,color,count,laps:[{t,split,wallTime,photo,dbId}],faceDescriptors,lastAutoCountAt}
+  let logEntries = []; // {time, athleteName, lapNo, split, wallTime, photo, source, dbId, confirmedFace}
   let sessionRunning = false, sessionStart = 0, sessionElapsed = 0, timerRAF = null;
   let autoMode = true;
-  let lastTriggerTime = 0;
-  let prevFrame = null;
-  let procW = 160, procH = 90;
 
   // AI face-recognition state
   let faceApiReady = false, faceApiLoading = false, faceApiFailed = false;
   let isScanningFaces = false;
+  let enrollmentInProgress = false;
   let lastFaceBoxes = []; // [{box, label, color}] from the continuous scan — for the overlay only
   const modelStatusEl = document.getElementById('modelStatus');
   function setModelStatus(msg){
@@ -66,11 +64,8 @@
   const camBtn = document.getElementById('camBtn');
   const switchBtn = document.getElementById('switchBtn');
   const autoBtn = document.getElementById('autoBtn');
-  const posRow = document.getElementById('posRow'), posSlider = document.getElementById('posSlider'), posVal = document.getElementById('posVal');
-  const sensRow = document.getElementById('sensRow'), sensSlider = document.getElementById('sensSlider'), sensVal = document.getElementById('sensVal');
   const cdRow = document.getElementById('cdRow'), cdSlider = document.getElementById('cdSlider'), cdVal = document.getElementById('cdVal');
   const faceRow = document.getElementById('faceRow'), faceSlider = document.getElementById('faceSlider'), faceVal = document.getElementById('faceVal');
-  const meterWrap = document.getElementById('meterWrap'), meterFill = document.getElementById('meterFill'), meterThresh = document.getElementById('meterThresh');
   const sessionTimerEl = document.getElementById('sessionTimer');
   const startBtn = document.getElementById('startBtn');
   const resetBtn = document.getElementById('resetBtn');
@@ -80,14 +75,7 @@
   const addBtn = document.getElementById('addBtn');
   const logListEl = document.getElementById('logList');
   const exportBtn = document.getElementById('exportBtn');
-  const assignModal = document.getElementById('assignModal');
-  const assignGrid = document.getElementById('assignGrid');
-  const modalTimeoutFill = document.getElementById('modalTimeoutFill');
   const toast = document.getElementById('toast');
-
-  const procCanvas = document.createElement('canvas');
-  procCanvas.width = procW; procCanvas.height = procH;
-  const procCtx = procCanvas.getContext('2d', {willReadFrequently:true});
 
   const shotCanvas = document.createElement('canvas');
   const shotCtx = shotCanvas.getContext('2d');
@@ -120,7 +108,7 @@
       console.error('โหลดโมเดล AI จดจำใบหน้าไม่สำเร็จ:', e);
       faceApiFailed = true;
       faceApiLoading = false;
-      setModelStatus("โหลด AI จดจำใบหน้าไม่สำเร็จ — ใช้การเลือกนักกีฬาด้วยตนเองแทน");
+      setModelStatus("โหลด AI จดจำใบหน้าไม่สำเร็จ — เชื่อมต่ออินเทอร์เน็ตแล้วลองเปิดกล้องใหม่");
     }
   }
 
@@ -229,7 +217,7 @@
       const athRows = athRes.data || [];
       const lapRows = lapRes.data || [];
 
-      athletes = athRows.map(r => ({ id:r.id, name:r.name, color:r.color, count:0, laps:[], faceDescriptors: r.face_descriptors || [] }));
+      athletes = athRows.map(r => ({ id:r.id, name:r.name, color:r.color, count:0, laps:[], faceDescriptors: r.face_descriptors || [], lastAutoCountAt:0 }));
       logEntries = lapRows.map(r => ({
         time: r.elapsed_ms, athleteName: r.athlete_name, lapNo: (r.lap_no==null ? '-' : r.lap_no),
         split: r.split_ms, source: r.source, wallTime: new Date(r.wall_time), photo: r.photo, dbId: r.id,
@@ -263,11 +251,8 @@
       camBtn.textContent = "ปิดกล้อง";
       switchBtn.style.display = 'inline-flex';
       autoBtn.style.display = 'inline-flex';
-      posRow.style.display = 'block';
-      sensRow.style.display = 'block';
       cdRow.style.display = 'block';
       faceRow.style.display = 'block';
-      meterWrap.style.display = 'block';
       resizeOverlay();
       requestAnimationFrame(processLoop);
       if(!faceApiReady && !faceApiLoading && !faceApiFailed) loadFaceModel();
@@ -282,15 +267,9 @@
     camBtn.textContent = "เปิดกล้อง";
     switchBtn.style.display = 'none';
     autoBtn.style.display = 'none';
-    posRow.style.display = 'none';
-    sensRow.style.display = 'none';
     cdRow.style.display = 'none';
     faceRow.style.display = 'none';
-    meterWrap.style.display = 'none';
-    prevFrame = null;
     lastFaceBoxes = [];
-    recentIdentifications = [];
-    motionHigh = false;
   }
   camBtn.addEventListener('click', startCamera);
   switchBtn.addEventListener('click', async ()=>{
@@ -301,7 +280,7 @@
   });
   autoBtn.addEventListener('click', ()=>{
     autoMode = !autoMode;
-    autoBtn.textContent = "โหมดอัตโนมัติ: " + (autoMode ? "เปิด" : "ปิด");
+    autoBtn.textContent = "นับอัตโนมัติ: " + (autoMode ? "เปิด" : "ปิด");
     autoBtn.classList.toggle('active', autoMode);
   });
   autoBtn.classList.add('active');
@@ -312,31 +291,18 @@
   }
   window.addEventListener('resize', resizeOverlay);
 
-  posSlider.addEventListener('input', ()=> posVal.textContent = posSlider.value + "%");
-  sensSlider.addEventListener('input', ()=> sensVal.textContent = sensSlider.value);
-  cdSlider.addEventListener('input', ()=> cdVal.textContent = (cdSlider.value/10).toFixed(1) + "s");
+  cdSlider.addEventListener('input', ()=> cdVal.textContent = cdSlider.value + "s");
   faceSlider.addEventListener('input', ()=> faceVal.textContent = faceSlider.value);
 
-  let lastProcTime = 0;
   let lastFaceScanTime = 0;
-  let enrollmentInProgress = false;
   function processLoop(ts){
     if(stream){
-      // การนับรอบและการสแกนหน้าทั้งหมด ทำงานเฉพาะตอนกด "เริ่มจับเวลา" แล้วเท่านั้น
+      // การนับรอบทั้งหมดทำงานเฉพาะตอนกด "เริ่มจับเวลา" แล้วเท่านั้น
       // ระหว่างตั้งกล้อง/ลงทะเบียนใบหน้าก่อนเริ่ม จะไม่มีอะไรมาแย่งประมวลผลกับ AI จดจำใบหน้า
-      if(sessionRunning){
-        // fast motion trigger — runs ~every 40ms, this is what actually counts laps
-        if(!lastProcTime || ts - lastProcTime > 40){
-          lastProcTime = ts;
-          try{ analyzeFrameMotion(); }catch(e){}
-        }
-        // continuous face recognition — scans the WHOLE frame (not just the line), runs slower,
-        // never gates or delays counting. Skips entirely while an enrollment call is in flight
-        // to avoid contention that made things freeze.
-        if(faceApiReady && !isScanningFaces && !enrollmentInProgress && (!lastFaceScanTime || ts - lastFaceScanTime > 450)){
-          lastFaceScanTime = ts;
-          scanFacesContinuous();
-        }
+      if(sessionRunning && faceApiReady && !isScanningFaces && !enrollmentInProgress &&
+         (!lastFaceScanTime || ts - lastFaceScanTime > 350)){
+        lastFaceScanTime = ts;
+        scanFacesContinuous();
       }
       drawOverlay();
     }
@@ -368,11 +334,8 @@
     return { athlete: best, distance: bestDist };
   }
 
-  // rolling memory of recent confident face matches, e.g. [{time, athleteId, distance}]
-  // kept for a few seconds so a face seen just BEFORE or AFTER the line-crossing still counts
-  let recentIdentifications = [];
-  const IDENTIFICATION_MEMORY_MS = 4000;
-
+  // สแกนหน้าทั้งเฟรมต่อเนื่อง — นี่คือกลไกหลักในการนับรอบ (ไม่มีเส้นชัยแล้ว)
+  // พบหน้าที่จำได้ + พ้นระยะเว้นของคนนั้นแล้ว = นับรอบให้ทันที
   async function scanFacesContinuous(){
     if(isScanningFaces || !faceApiReady || video.readyState < 2) return;
     isScanningFaces = true;
@@ -383,6 +346,7 @@
         .withFaceDescriptors();
 
       const threshold = Number(faceSlider.value)/100;
+      const cooldownMs = Number(cdSlider.value) * 1000;
       const now = performance.now();
       const boxes = [];
 
@@ -390,33 +354,18 @@
         const { athlete, distance } = matchFace(d.descriptor);
         const matched = athlete && distance < threshold;
         boxes.push({ box: d.detection.box, label: matched ? athlete.name : '?', color: matched ? athlete.color : '#ff4438' });
-        if(matched){
-          recentIdentifications.push({ time: now, athleteId: athlete.id, distance });
+        if(matched && autoMode){
+          const lastAt = athlete.lastAutoCountAt || 0;
+          if(now - lastAt > cooldownMs){
+            athlete.lastAutoCountAt = now;
+            const photo = capturePhoto();
+            lapForAthlete(athlete, 'face-auto', { photo, wallTime: new Date(), confirmedFace:true, faceDistance: distance });
+          }
         }
       });
       lastFaceBoxes = boxes;
-      recentIdentifications = recentIdentifications.filter(r => now - r.time < IDENTIFICATION_MEMORY_MS);
-    }catch(e){ /* ignore — this is a background aid, never blocks counting */ }
+    }catch(e){ /* ignore — this is a background aid, never blocks the app */ }
     isScanningFaces = false;
-  }
-
-  // เลือกการระบุตัวตนที่ "มั่นใจที่สุด" ในช่วงความจำล่าสุด (ไม่ต้องรอให้เห็นหน้าตรงจังหวะเส้นพอดี)
-  function pickRecentIdentification(){
-    if(!recentIdentifications.length) return null;
-    let best = null;
-    recentIdentifications.forEach(r=>{
-      if(!best || r.distance < best.distance) best = r;
-    });
-    return best;
-  }
-
-  function loadImageFromDataUrl(dataUrl){
-    return new Promise((resolve, reject)=>{
-      const img = new Image();
-      img.onload = () => resolve(img);
-      img.onerror = reject;
-      img.src = dataUrl;
-    });
   }
 
   // แปลงตัวอย่างใบหน้าให้เป็นรูปแบบเดียวกันเสมอ {descriptor, photo}
@@ -507,92 +456,6 @@
   document.getElementById('faceModalCloseBtn').addEventListener('click', closeFaceModal);
   faceModalEl.addEventListener('click', (e)=>{ if(e.target===faceModalEl) closeFaceModal(); });
 
-  // เมื่อเกิดการนับรอบและมีนักกีฬาหลายคน:
-  // 1) เช็คความจำล่าสุดก่อน (หน้าที่เห็นก่อน/หลังเส้นไม่กี่วินาทีก็ใช้ได้ ไม่ต้องรอเห็นหน้าตรงเส้นพอดี)
-  // 2) ถ้าความจำว่างเปล่า ลองจับจากรูปที่ถ่ายไว้ตอนนั้นอีกครั้งเป็นทางเลือกสุดท้าย
-  // 3) ถ้ายังไม่ได้ เปิดหน้าต่างให้เลือกเอง — ไม่มีทางค้าง
-  async function tryFaceMatchThenAssign(source, capture){
-    const recent = pickRecentIdentification();
-    if(recent){
-      const athlete = athletes.find(a => a.id === recent.athleteId);
-      if(athlete){
-        capture.confirmedFace = true;
-        capture.faceDistance = recent.distance;
-        recentIdentifications = []; // เคลียร์ความจำ กันเอาไปใช้ซ้ำกับรอบถัดไปของคนอื่น
-        lapForAthlete(athlete, source + '-face', capture);
-        return;
-      }
-    }
-    if(faceApiReady && capture.photo){
-      try{
-        const img = await loadImageFromDataUrl(capture.photo);
-        const result = await faceapi
-          .detectSingleFace(img, new faceapi.TinyFaceDetectorOptions({ inputSize:320, scoreThreshold:0.5 }))
-          .withFaceLandmarks()
-          .withFaceDescriptor();
-        if(result){
-          const threshold = Number(faceSlider.value)/100;
-          const { athlete, distance } = matchFace(result.descriptor);
-          if(athlete && distance < threshold){
-            capture.confirmedFace = true;
-            capture.faceDistance = distance;
-            lapForAthlete(athlete, source + '-face', capture);
-            return;
-          }
-        }
-      }catch(e){
-        console.error('จดจำใบหน้าไม่สำเร็จในรอบนี้ ให้เลือกเอง:', e);
-      }
-    }
-    openAssignModal(capture);
-  }
-
-  // motion detection — the primary, fast trigger. Uses hysteresis (separate trigger/release
-  // thresholds) so a single crossing can't fire twice from signal noise, and re-checks every ~40ms
-  // so a fast runner isn't missed between samples.
-  let motionHigh = false;
-  function analyzeFrameMotion(){
-    if(video.readyState < 2) return;
-    procCtx.drawImage(video, 0, 0, procW, procH);
-    const linePct = posSlider.value/100;
-    const bandH = Math.max(4, Math.round(procH*0.08));
-    const y0 = Math.max(0, Math.round(linePct*procH - bandH/2));
-    const y1 = Math.min(procH, y0+bandH);
-    const img = procCtx.getImageData(0, y0, procW, y1-y0);
-    const data = img.data;
-
-    let score = 0, count = 0;
-    if(prevFrame && prevFrame.length === data.length){
-      for(let i=0;i<data.length;i+=16){
-        score += Math.abs(data[i]-prevFrame[i]);
-        count++;
-      }
-    }
-    prevFrame = data;
-    const avgDiff = count ? score/count : 0;
-    const threshold = Number(sensSlider.value);
-    const releaseThreshold = threshold * 0.55; // must drop well below trigger level before re-arming
-    const cooldownMs = Number(cdSlider.value)*100;
-
-    const meterPct = Math.min(100, (avgDiff/ (threshold*3)) *100);
-    meterFill.style.width = meterPct + "%";
-    meterThresh.style.left = Math.min(97,(threshold/(threshold*3))*100) + "%";
-
-    const now = performance.now();
-    if(!motionHigh){
-      if(avgDiff > threshold && (now-lastTriggerTime) > cooldownMs){
-        motionHigh = true;
-        lastTriggerTime = now;
-        const capture = { photo: capturePhoto(), wallTime: new Date() };
-        if(autoMode) triggerLap('auto', capture);
-        flashLine = true; flashLineTime = now;
-      }
-    } else if(avgDiff < releaseThreshold){
-      motionHigh = false; // signal dropped back down — ready to detect the next crossing
-    }
-  }
-
-  let flashLine = false, flashLineTime = 0;
   function drawOverlay(){
     const ctx = overlay.getContext('2d');
     const w = overlay.width, h = overlay.height;
@@ -600,21 +463,17 @@
     ctx.clearRect(0,0,w,h);
 
     if(!sessionRunning){
-      // ยังไม่กด "เริ่มจับเวลา" — ไม่วาดเส้น/กรอบใดๆ เพื่อไม่ให้ตีกับตอนลงทะเบียนใบหน้า
+      // ยังไม่กด "เริ่มจับเวลา" — ไม่วาดกรอบใดๆ เพื่อไม่ให้ตีกับตอนลงทะเบียนใบหน้า
       ctx.fillStyle = 'rgba(0,0,0,0.35)';
       ctx.fillRect(0, h/2-18, w, 36);
       ctx.fillStyle = 'rgba(242,241,234,0.95)';
       ctx.font = '13px sans-serif';
       ctx.textAlign = 'center';
-      ctx.fillText('กด "เริ่มจับเวลา" เพื่อเริ่มตรวจจับเส้นชัย', w/2, h/2+5);
+      ctx.fillText('กด "เริ่มจับเวลา" เพื่อเริ่มให้ AI จำหน้าและนับรอบ', w/2, h/2+5);
       ctx.textAlign = 'left';
       return;
     }
 
-    const linePct = posSlider.value/100;
-    const flashActive = flashLine && (performance.now()-flashLineTime < 350);
-
-    // draw AI-detected face boxes (mapped from video pixel space to display space)
     if(faceApiReady && lastFaceBoxes.length){
       const t = getCoverTransform();
       if(t){
@@ -624,27 +483,12 @@
           const dw2 = box.width*t.scale, dh2 = box.height*t.scale;
           ctx.strokeStyle = item.color || 'rgba(255,68,56,0.85)';
           ctx.lineWidth = 2;
-          ctx.setLineDash([]);
           ctx.strokeRect(dx, dy, dw2, dh2);
           ctx.font = '11px sans-serif';
           ctx.fillStyle = item.color || 'rgba(255,68,56,0.85)';
           ctx.fillText(item.label || '?', dx+3, Math.max(11, dy-4));
         });
       }
-    }
-
-    const y = linePct*h;
-    ctx.strokeStyle = flashActive ? '#3ddc84' : 'rgba(255,68,56,0.9)';
-    ctx.lineWidth = flashActive ? 5 : 2.5;
-    ctx.setLineDash([10,8]);
-    ctx.beginPath();
-    ctx.moveTo(0,y); ctx.lineTo(w,y); ctx.stroke();
-    ctx.setLineDash([]);
-    if(flashActive){
-      ctx.fillStyle = 'rgba(61,220,132,0.12)';
-      ctx.fillRect(0, y-24, w, 48);
-    } else {
-      flashLine = false;
     }
   }
 
@@ -662,13 +506,10 @@
       sessionStart = performance.now();
       startBtn.textContent = "หยุดชั่วคราว";
       startBtn.classList.remove('btn-primary'); startBtn.classList.add('btn-ghost','active');
-      // เริ่มตรวจจับใหม่แบบสะอาด กันสัญญาณเก่าตอนตั้งกล้อง/ลงทะเบียนใบหน้าทำให้นับพลาดจังหวะแรก
-      prevFrame = null;
-      motionHigh = false;
-      lastProcTime = 0;
+      // เริ่มตรวจจับใหม่แบบสะอาด กันของเก่าตอนตั้งกล้อง/ลงทะเบียนใบหน้าทำให้นับพลาดจังหวะแรก
       lastFaceScanTime = 0;
-      recentIdentifications = [];
       lastFaceBoxes = [];
+      athletes.forEach(a=>{ a.lastAutoCountAt = 0; });
       tickTimer();
     } else {
       sessionRunning = false;
@@ -685,7 +526,7 @@
     sessionTimerEl.textContent = "00:00.0";
     startBtn.textContent = "เริ่มจับเวลา";
     startBtn.classList.add('btn-primary'); startBtn.classList.remove('btn-ghost','active');
-    athletes.forEach(a=>{ a.count=0; a.laps=[]; });
+    athletes.forEach(a=>{ a.count=0; a.laps=[]; a.lastAutoCountAt=0; });
     logEntries = [];
     renderAthletes(); renderLog();
     await persistClearLaps();
@@ -700,7 +541,7 @@
     if(!name) return;
     const id = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : 'a-'+Date.now()+'-'+Math.random().toString(16).slice(2);
     const color = COLORS[athletes.length % COLORS.length];
-    const a = { id, name, color, count:0, laps:[], faceDescriptors:[] };
+    const a = { id, name, color, count:0, laps:[], faceDescriptors:[], lastAutoCountAt:0 };
     athletes.push(a);
     renderAthletes();
     persistAddAthlete(a);
@@ -733,7 +574,6 @@
     showToast((a.name)+" — รอบที่ "+a.count);
     persistLapEntry({ athleteId:a.id, athleteName:a.name, lapNo:a.count, elapsedMs:t, splitMs:split, wallTime, source:sourceLabel, photo })
       .then(id => { lapObj.dbId = id; logObj.dbId = id; });
-    recentIdentifications = []; // กันความจำใบหน้าเก่าถูกใช้ซ้ำกับรอบถัดไปของคนอื่น
   }
 
   // ลบรอบล่าสุดของนักกีฬาคนหนึ่ง (แก้รอบที่กดพลาด/นับซ้ำ)
@@ -840,77 +680,6 @@
     }).join('');
   }
 
-  // ---------- auto trigger -> assign ----------
-  function triggerLap(source, capture){
-    capture = capture || { photo: capturePhoto(), wallTime: new Date() };
-    if(athletes.length === 0){
-      const entry = { time: currentElapsed(), athleteName:'(ไม่ระบุ)', lapNo:'-', split:0, source, wallTime: capture.wallTime, photo: capture.photo };
-      logEntries.push(entry);
-      renderLog();
-      beep();
-      showToast("ตรวจพบการวิ่งผ่าน — ยังไม่มีนักกีฬาในระบบ");
-      persistLapEntry({ athleteId:null, athleteName:entry.athleteName, lapNo:'-', elapsedMs:entry.time, splitMs:0, wallTime:entry.wallTime, source, photo:entry.photo });
-      return;
-    }
-    if(athletes.length === 1){
-      lapForAthlete(athletes[0], source, capture);
-      return;
-    }
-    tryFaceMatchThenAssign(source, capture);
-  }
-
-  let modalStart = 0, modalRAF = null;
-  function openAssignModal(capture){
-    assignGrid.innerHTML = '';
-    const modalPhoto = document.getElementById('modalPhoto');
-    if(capture && capture.photo){
-      modalPhoto.src = capture.photo;
-      modalPhoto.style.display = 'block';
-    } else {
-      modalPhoto.style.display = 'none';
-    }
-    athletes.forEach(a=>{
-      const btn = document.createElement('button');
-      btn.textContent = a.name + " (" + a.count + ")";
-      btn.style.borderLeft = "4px solid " + a.color;
-      btn.addEventListener('click', ()=>{ closeAssignModal(); lapForAthlete(a, 'auto-confirmed', capture); });
-      assignGrid.appendChild(btn);
-    });
-    const unkBtn = document.createElement('button');
-    unkBtn.textContent = "ไม่ระบุ / ข้าม";
-    unkBtn.style.gridColumn = '1 / -1';
-    unkBtn.addEventListener('click', ()=>{
-      closeAssignModal();
-      const entry = { time: currentElapsed(), athleteName:'(ไม่ระบุ)', lapNo:'-', split:0, source:'auto-skipped', wallTime: capture.wallTime, photo: capture.photo };
-      logEntries.push(entry);
-      renderLog();
-      persistLapEntry({ athleteId:null, athleteName:entry.athleteName, lapNo:'-', elapsedMs:entry.time, splitMs:0, wallTime:entry.wallTime, source:entry.source, photo:entry.photo });
-    });
-    assignGrid.appendChild(unkBtn);
-
-    assignModal.classList.add('show');
-    modalStart = performance.now();
-    const DURATION = 5000;
-    function tick(){
-      const pct = Math.max(0, 1-(performance.now()-modalStart)/DURATION);
-      modalTimeoutFill.style.width = (pct*100)+"%";
-      if(pct<=0){
-        closeAssignModal();
-        const entry = { time: currentElapsed(), athleteName:'(ไม่ระบุ)', lapNo:'-', split:0, source:'auto-timeout', wallTime: capture.wallTime, photo: capture.photo };
-        logEntries.push(entry);
-        renderLog();
-        persistLapEntry({ athleteId:null, athleteName:entry.athleteName, lapNo:'-', elapsedMs:entry.time, splitMs:0, wallTime:entry.wallTime, source:entry.source, photo:entry.photo });
-        return;
-      }
-      modalRAF = requestAnimationFrame(tick);
-    }
-    tick();
-  }
-  function closeAssignModal(){
-    assignModal.classList.remove('show');
-    cancelAnimationFrame(modalRAF);
-  }
-
   // ---------- log ----------
   function renderLog(){
     if(!logEntries.length){ logListEl.innerHTML = '<div class="log-empty">ยังไม่มีการนับรอบ</div>'; return; }
@@ -1012,6 +781,31 @@
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
     URL.revokeObjectURL(url);
     showToast("ส่งออก CSV แล้ว (ไม่รวมรูปถ่าย)");
+  });
+
+  // ---------- PWA: ติดตั้งลงเครื่อง + service worker ----------
+  if('serviceWorker' in navigator){
+    window.addEventListener('load', ()=>{
+      navigator.serviceWorker.register('sw.js').catch(e=>console.error('SW register failed:', e));
+    });
+  }
+  let deferredInstallPrompt = null;
+  const installBtn = document.getElementById('installBtn');
+  window.addEventListener('beforeinstallprompt', (e)=>{
+    e.preventDefault();
+    deferredInstallPrompt = e;
+    installBtn.style.display = 'inline-flex';
+  });
+  installBtn.addEventListener('click', async ()=>{
+    if(!deferredInstallPrompt) return;
+    deferredInstallPrompt.prompt();
+    await deferredInstallPrompt.userChoice;
+    deferredInstallPrompt = null;
+    installBtn.style.display = 'none';
+  });
+  window.addEventListener('appinstalled', ()=>{
+    installBtn.style.display = 'none';
+    showToast('ติดตั้งแอปสำเร็จ — เปิดจากหน้าจอโฮมได้เลย');
   });
 
   // ---------- init ----------
