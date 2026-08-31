@@ -2,10 +2,17 @@
   "use strict";
 
   // ---------- session / supabase ----------
+  function generateShortCode(){
+    // สั้น จำง่าย พิมพ์ข้ามเครื่องได้สะดวก (ตัดตัวที่สับสนออก: 0/O, 1/I)
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    let s = '';
+    for(let i=0;i<6;i++) s += chars[Math.floor(Math.random()*chars.length)];
+    return s;
+  }
   function getOrCreateSessionId(){
     let id = localStorage.getItem('lc_session_id');
     if(!id){
-      id = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : 'sess-'+Date.now()+'-'+Math.random().toString(16).slice(2);
+      id = generateShortCode();
       localStorage.setItem('lc_session_id', id);
     }
     return id;
@@ -13,6 +20,34 @@
   const sessionId = getOrCreateSessionId();
   let sb = null;
   let supabaseReady = false;
+
+  // แสดง/เปลี่ยน/แชร์ "รหัสทีม" — พิมพ์รหัสเดียวกันในอุปกรณ์อื่นเพื่อดูข้อมูลชุดเดียวกัน
+  const teamCodeValEl = document.getElementById('teamCodeVal');
+  const teamCodeChangeBtn = document.getElementById('teamCodeChangeBtn');
+  if(teamCodeValEl){
+    teamCodeValEl.textContent = sessionId;
+    teamCodeValEl.addEventListener('click', ()=>{
+      if(navigator.clipboard && navigator.clipboard.writeText){
+        navigator.clipboard.writeText(sessionId)
+          .then(()=> showToast('คัดลอกรหัสทีมแล้ว: ' + sessionId))
+          .catch(()=> showToast('รหัสทีม: ' + sessionId));
+      } else {
+        showToast('รหัสทีม: ' + sessionId);
+      }
+    });
+  }
+  if(teamCodeChangeBtn){
+    teamCodeChangeBtn.addEventListener('click', ()=>{
+      const input = prompt('พิมพ์รหัสทีมที่ต้องการใช้ (ให้ตรงกับอุปกรณ์อื่นที่จะดูข้อมูลชุดเดียวกัน):', sessionId);
+      if(input === null) return;
+      const trimmed = input.trim().toUpperCase().replace(/\s+/g, '');
+      if(!trimmed){ showToast('รหัสว่างเปล่า ไม่เปลี่ยน'); return; }
+      if(trimmed === sessionId){ showToast('รหัสเดิมอยู่แล้ว'); return; }
+      if(!confirm('เปลี่ยนเป็นรหัส "' + trimmed + '" และโหลดข้อมูลของรหัสนี้แทน?\n(หน้าเว็บจะรีโหลดใหม่)')) return;
+      localStorage.setItem('lc_session_id', trimmed);
+      location.reload();
+    });
+  }
 
   const syncStatusEl = document.getElementById('syncStatus');
   function setSyncStatus(msg){
