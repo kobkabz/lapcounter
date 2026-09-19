@@ -49,13 +49,6 @@
     });
   }
 
-  const syncStatusEl = document.getElementById('syncStatus');
-  function setSyncStatus(msg){
-    if(!msg){ syncStatusEl.style.display = 'none'; return; }
-    syncStatusEl.textContent = msg;
-    syncStatusEl.style.display = 'block';
-  }
-
   function initSupabase(){
     try{
       const url = window.SUPABASE_URL, key = window.SUPABASE_ANON_KEY;
@@ -70,37 +63,27 @@
       setSyncStatus("เชื่อมต่อ Supabase ไม่สำเร็จ — ใช้งานแบบไม่บันทึกข้อมูล");
     }
   }
+  const syncStatusEl = document.getElementById('syncStatus');
+  function setSyncStatus(msg){
+    if(!msg){ syncStatusEl.style.display = 'none'; return; }
+    syncStatusEl.textContent = msg;
+    syncStatusEl.style.display = 'block';
+  }
 
   // ---------- state ----------
   let stream = null, facing = "environment";
-  let athletes = []; // {id,name,color,count,laps:[{t,split,wallTime,photo,dbId}],faceDescriptors,lastAutoCountAt}
-  let logEntries = []; // {time, athleteName, lapNo, split, wallTime, photo, source, dbId, confirmedFace}
+  let athletes = []; // {id,name,color,count,laps:[{t,split,wallTime,photo,dbId}],nfcSerial,lastAutoCountAt}
+  let logEntries = []; // {time, athleteName, lapNo, split, wallTime, photo, source, dbId}
   let sessionRunning = false, sessionStart = 0, sessionElapsed = 0, timerRAF = null;
-  let autoMode = true;
-
-  // AI face-recognition state
-  let faceApiReady = false, faceApiLoading = false, faceApiFailed = false;
-  let isScanningFaces = false;
-  let enrollmentInProgress = false;
-  let lastFaceBoxes = []; // [{box, label, color}] from the continuous scan — for the overlay only
-  const modelStatusEl = document.getElementById('modelStatus');
-  function setModelStatus(msg){
-    if(!msg){ modelStatusEl.style.display = 'none'; return; }
-    modelStatusEl.textContent = msg;
-    modelStatusEl.style.display = 'block';
-  }
 
   const COLORS = ["#ff4438","#3ddc84","#ffb020","#4ea1ff","#c78bff","#ff7ab8","#7fffd4","#ffd166"];
 
   // ---------- elements ----------
   const video = document.getElementById('video');
-  const overlay = document.getElementById('overlay');
   const placeholder = document.getElementById('placeholder');
   const camBtn = document.getElementById('camBtn');
   const switchBtn = document.getElementById('switchBtn');
-  const autoBtn = document.getElementById('autoBtn');
-  const cdRow = document.getElementById('cdRow'), cdSlider = document.getElementById('cdSlider'), cdVal = document.getElementById('cdVal');
-  const faceRow = document.getElementById('faceRow'), faceSlider = document.getElementById('faceSlider'), faceVal = document.getElementById('faceVal');
+  const cdSlider = document.getElementById('cdSlider'), cdVal = document.getElementById('cdVal');
   const sessionTimerEl = document.getElementById('sessionTimer');
   const startBtn = document.getElementById('startBtn');
   const resetBtn = document.getElementById('resetBtn');
@@ -125,26 +108,6 @@
   }
   function fmtWallTime(date){
     return date.toTimeString().slice(0,8);
-  }
-
-  const FACE_MODEL_URL = "https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js/weights/";
-  async function loadFaceModel(){
-    faceApiLoading = true;
-    setModelStatus("กำลังโหลดโมเดล AI จดจำใบหน้า (ครั้งแรกอาจใช้เวลาสักครู่)...");
-    try{
-      await faceapi.nets.tinyFaceDetector.loadFromUri(FACE_MODEL_URL);
-      await faceapi.nets.faceLandmark68Net.loadFromUri(FACE_MODEL_URL);
-      await faceapi.nets.faceRecognitionNet.loadFromUri(FACE_MODEL_URL);
-      faceApiReady = true;
-      faceApiLoading = false;
-      setModelStatus("");
-      showToast("โหลด AI จดจำใบหน้าสำเร็จ — ลงทะเบียนหน้านักกีฬาได้แล้ว");
-    }catch(e){
-      console.error('โหลดโมเดล AI จดจำใบหน้าไม่สำเร็จ:', e);
-      faceApiFailed = true;
-      faceApiLoading = false;
-      setModelStatus("โหลด AI จดจำใบหน้าไม่สำเร็จ — เชื่อมต่ออินเทอร์เน็ตแล้วลองเปิดกล้องใหม่");
-    }
   }
 
   // ---------- helpers ----------
@@ -177,21 +140,21 @@
   async function persistAddAthlete(a){
     if(!supabaseReady) return;
     try{
-      const { error } = await sb.from('athletes').insert({ id:a.id, session_id: sessionId, name:a.name, color:a.color, face_descriptors: a.faceDescriptors || [] });
+      const { error } = await sb.from('athletes').insert({ id:a.id, session_id: sessionId, name:a.name, color:a.color, nfc_serial: a.nfcSerial || null });
       if(error) throw error;
     }catch(e){
       console.error('บันทึกนักกีฬาไป Supabase ไม่สำเร็จ:', e);
       showToast('บันทึกนักกีฬาไป Supabase ไม่สำเร็จ');
     }
   }
-  async function persistUpdateAthleteFace(a){
+  async function persistUpdateAthleteTag(a){
     if(!supabaseReady) return;
     try{
-      const { error } = await sb.from('athletes').update({ face_descriptors: a.faceDescriptors || [] }).eq('id', a.id);
+      const { error } = await sb.from('athletes').update({ nfc_serial: a.nfcSerial || null }).eq('id', a.id);
       if(error) throw error;
     }catch(e){
-      console.error('บันทึกใบหน้าไป Supabase ไม่สำเร็จ:', e);
-      showToast('บันทึกใบหน้าไป Supabase ไม่สำเร็จ (เก็บไว้ในเครื่องนี้ชั่วคราว)');
+      console.error('บันทึกแท็กไป Supabase ไม่สำเร็จ:', e);
+      showToast('บันทึกแท็กไป Supabase ไม่สำเร็จ (เก็บไว้ในเครื่องนี้ชั่วคราว)');
     }
   }
   async function persistRemoveAthlete(id){
@@ -252,11 +215,10 @@
       const athRows = athRes.data || [];
       const lapRows = lapRes.data || [];
 
-      athletes = athRows.map(r => ({ id:r.id, name:r.name, color:r.color, count:0, laps:[], faceDescriptors: r.face_descriptors || [], lastAutoCountAt:0 }));
+      athletes = athRows.map(r => ({ id:r.id, name:r.name, color:r.color, count:0, laps:[], nfcSerial: r.nfc_serial || null, lastAutoCountAt:0 }));
       logEntries = lapRows.map(r => ({
         time: r.elapsed_ms, athleteName: r.athlete_name, lapNo: (r.lap_no==null ? '-' : r.lap_no),
-        split: r.split_ms, source: r.source, wallTime: new Date(r.wall_time), photo: r.photo, dbId: r.id,
-        confirmedFace: !!(r.source && r.source.includes('face'))
+        split: r.split_ms, source: r.source, wallTime: new Date(r.wall_time), photo: r.photo, dbId: r.id
       }));
       lapRows.forEach(r=>{
         if(!r.athlete_id) return;
@@ -272,7 +234,111 @@
     }
   }
 
-  // ---------- camera ----------
+  // ---------- NFC (NDEFReader) — ตัวนับหลัก ----------
+  const nfcSupportWarningEl = document.getElementById('nfcSupportWarning');
+  const nfcStatusBox = document.getElementById('nfcStatusBox');
+  const nfcDotEl = document.getElementById('nfcDot');
+  const nfcStatusTextEl = document.getElementById('nfcStatusText');
+  const nfcToggleBtn = document.getElementById('nfcToggleBtn');
+
+  const nfcSupported = ('NDEFReader' in window);
+  let ndefReader = null;
+  let nfcAbortController = null;
+  let nfcScanning = false;
+  let enrollTargetAthleteId = null; // ถ้าตั้งไว้ การอ่านแท็กครั้งถัดไปจะไปลงทะเบียนแทนที่จะนับรอบ
+
+  if(!nfcSupported){
+    nfcSupportWarningEl.style.display = 'block';
+    nfcSupportWarningEl.textContent = '⚠️ อุปกรณ์/เบราว์เซอร์นี้ไม่รองรับ NFC ผ่านเว็บ (Web NFC รองรับเฉพาะ Chrome/Samsung Internet บน Android เท่านั้น ไม่รองรับ iPhone หรือคอมพิวเตอร์) — ใช้ปุ่ม +1 กดเองแทนได้';
+    nfcToggleBtn.disabled = true;
+    nfcToggleBtn.textContent = '📡 ไม่รองรับ NFC บนอุปกรณ์นี้';
+  }
+
+  function setNfcStatus(scanning, textOverride){
+    nfcDotEl.classList.toggle('scanning', !!scanning);
+    if(textOverride){ nfcStatusTextEl.textContent = textOverride; return; }
+    nfcStatusTextEl.textContent = scanning ? 'กำลังรอแตะแท็ก...' : 'ยังไม่ได้เริ่มสแกน';
+  }
+
+  async function startNfcScan(){
+    if(!nfcSupported) return;
+    try{
+      nfcAbortController = new AbortController();
+      ndefReader = new NDEFReader();
+      await ndefReader.scan({ signal: nfcAbortController.signal });
+      nfcScanning = true;
+      nfcToggleBtn.textContent = '⏹️ หยุดสแกน NFC';
+      setNfcStatus(true);
+      ndefReader.onreading = handleNfcReading;
+      ndefReader.onreadingerror = () => showToast('อ่านแท็กไม่สำเร็จ ลองแตะใหม่อีกครั้ง');
+      showToast('เริ่มสแกน NFC แล้ว — แตะแท็กได้เลย');
+    }catch(e){
+      console.error('เปิดสแกน NFC ไม่สำเร็จ:', e);
+      const msg = (e && e.name === 'NotAllowedError')
+        ? 'ไม่ได้รับสิทธิ์ใช้ NFC — ถ้าเคยกดปฏิเสธไว้ ต้องไปเปิดสิทธิ์ใหม่ในตั้งค่าเว็บไซต์ของเบราว์เซอร์'
+        : 'เปิดสแกน NFC ไม่สำเร็จ: ' + (e && e.message ? e.message : e);
+      showToast(msg);
+    }
+  }
+  function stopNfcScan(){
+    if(nfcAbortController) nfcAbortController.abort();
+    nfcAbortController = null;
+    ndefReader = null;
+    nfcScanning = false;
+    nfcToggleBtn.textContent = '📡 เริ่มสแกน NFC';
+    setNfcStatus(false);
+  }
+  nfcToggleBtn.addEventListener('click', ()=>{
+    if(nfcScanning) stopNfcScan(); else startNfcScan();
+  });
+
+  function handleNfcReading(event){
+    const serial = event.serialNumber;
+    if(!serial){ showToast('อ่านแท็กได้แต่ไม่มีหมายเลขซีเรียล (แท็กนี้อาจไม่รองรับ)'); return; }
+
+    // โหมดลงทะเบียน: กำลังรอผูกแท็กนี้กับนักกีฬาที่เลือกไว้
+    if(enrollTargetAthleteId){
+      const a = athletes.find(x=>x.id===enrollTargetAthleteId);
+      enrollTargetAthleteId = null;
+      if(a){
+        a.nfcSerial = serial;
+        renderAthletes();
+        persistUpdateAthleteTag(a);
+        showToast('ผูกแท็กกับ ' + a.name + ' สำเร็จ');
+        beep();
+      }
+      return;
+    }
+
+    // โหมดนับรอบปกติ
+    if(!sessionRunning){ showToast('กด "เริ่มจับเวลา" ก่อนถึงจะเริ่มนับรอบได้'); return; }
+    const athlete = athletes.find(a => a.nfcSerial === serial);
+    if(!athlete){ showToast('แท็กนี้ยังไม่ได้ลงทะเบียนกับนักกีฬาคนไหน'); return; }
+
+    const cooldownMs = Number(cdSlider.value) * 1000;
+    const now = performance.now();
+    if(now - (athlete.lastAutoCountAt || 0) < cooldownMs) return; // กันนับซ้ำตอนแตะค้าง/แตะรัว
+    athlete.lastAutoCountAt = now;
+    const photo = capturePhoto(); // null ถ้าไม่ได้เปิดกล้อง — ไม่บังคับ
+    lapForAthlete(athlete, 'nfc-auto', { photo, wallTime: new Date() });
+  }
+
+  // เริ่มลงทะเบียนแท็กให้นักกีฬาคนหนึ่ง — เปิดสแกนให้อัตโนมัติถ้ายังไม่ได้เปิด แล้วรอแตะแท็กครั้งถัดไป
+  async function beginEnrollTag(a){
+    if(!nfcSupported){ showToast('อุปกรณ์นี้ไม่รองรับ NFC'); return; }
+    if(!nfcScanning) await startNfcScan();
+    enrollTargetAthleteId = a.id;
+    setNfcStatus(true, 'แตะแท็กของ "' + a.name + '" ตอนนี้...');
+    showToast('แตะแท็ก NFC ของ ' + a.name + ' ที่หลังโทรศัพท์ได้เลย');
+  }
+  function clearTag(a){
+    a.nfcSerial = null;
+    renderAthletes();
+    persistUpdateAthleteTag(a);
+    showToast('ล้างแท็กของ ' + a.name + ' แล้ว');
+  }
+
+  // ---------- กล้อง (ไม่บังคับ — ถ่ายภาพประกอบทุกรอบเท่านั้น ไม่เกี่ยวกับการนับ) ----------
   async function startCamera(){
     if(stream){ stopCamera(); return; }
     try{
@@ -285,12 +351,6 @@
       placeholder.style.display = 'none';
       camBtn.textContent = "ปิดกล้อง";
       switchBtn.style.display = 'inline-flex';
-      autoBtn.style.display = 'inline-flex';
-      cdRow.style.display = 'block';
-      faceRow.style.display = 'block';
-      resizeOverlay();
-      requestAnimationFrame(processLoop);
-      if(!faceApiReady && !faceApiLoading && !faceApiFailed) loadFaceModel();
     }catch(err){
       showToast("เปิดกล้องไม่ได้: อนุญาตสิทธิ์กล้องในเบราว์เซอร์ก่อน");
     }
@@ -301,10 +361,6 @@
     placeholder.style.display = 'flex';
     camBtn.textContent = "เปิดกล้อง";
     switchBtn.style.display = 'none';
-    autoBtn.style.display = 'none';
-    cdRow.style.display = 'none';
-    faceRow.style.display = 'none';
-    lastFaceBoxes = [];
   }
   camBtn.addEventListener('click', startCamera);
   switchBtn.addEventListener('click', async ()=>{
@@ -313,219 +369,8 @@
     stream = null;
     await startCamera();
   });
-  autoBtn.addEventListener('click', ()=>{
-    autoMode = !autoMode;
-    autoBtn.textContent = "นับอัตโนมัติ: " + (autoMode ? "เปิด" : "ปิด");
-    autoBtn.classList.toggle('active', autoMode);
-  });
-  autoBtn.classList.add('active');
-
-  function resizeOverlay(){
-    const rect = video.getBoundingClientRect();
-    overlay.width = rect.width; overlay.height = rect.height;
-  }
-  window.addEventListener('resize', resizeOverlay);
 
   cdSlider.addEventListener('input', ()=> cdVal.textContent = cdSlider.value + "s");
-  faceSlider.addEventListener('input', ()=> faceVal.textContent = faceSlider.value);
-
-  let lastFaceScanTime = 0;
-  function processLoop(ts){
-    if(stream){
-      // การนับรอบทั้งหมดทำงานเฉพาะตอนกด "เริ่มจับเวลา" แล้วเท่านั้น
-      // ระหว่างตั้งกล้อง/ลงทะเบียนใบหน้าก่อนเริ่ม จะไม่มีอะไรมาแย่งประมวลผลกับ AI จดจำใบหน้า
-      if(sessionRunning && faceApiReady && !isScanningFaces && !enrollmentInProgress &&
-         (!lastFaceScanTime || ts - lastFaceScanTime > 350)){
-        lastFaceScanTime = ts;
-        scanFacesContinuous();
-      }
-      drawOverlay();
-    }
-    requestAnimationFrame(processLoop);
-  }
-
-  function getCoverTransform(){
-    const vw = video.videoWidth, vh = video.videoHeight;
-    const dw = overlay.width, dh = overlay.height;
-    if(!vw || !vh || !dw || !dh) return null;
-    const scale = Math.max(dw/vw, dh/vh);
-    return { scale, offsetX: (dw - vw*scale)/2, offsetY: (dh - vh*scale)/2, vw, vh };
-  }
-
-  function euclideanDistance(a, b){
-    let sum = 0;
-    for(let i=0;i<a.length;i++){ const d = a[i]-b[i]; sum += d*d; }
-    return Math.sqrt(sum);
-  }
-  function matchFace(descriptor){
-    let best = null, bestDist = Infinity;
-    athletes.forEach(a=>{
-      (a.faceDescriptors||[]).forEach(raw=>{
-        const fd = normalizeFaceSample(raw);
-        const dist = euclideanDistance(descriptor, fd.descriptor);
-        if(dist < bestDist){ bestDist = dist; best = a; }
-      });
-    });
-    return { athlete: best, distance: bestDist };
-  }
-
-  // สแกนหน้าทั้งเฟรมต่อเนื่อง — นี่คือกลไกหลักในการนับรอบ (ไม่มีเส้นชัยแล้ว)
-  // พบหน้าที่จำได้ + พ้นระยะเว้นของคนนั้นแล้ว = นับรอบให้ทันที
-  async function scanFacesContinuous(){
-    if(isScanningFaces || !faceApiReady || video.readyState < 2) return;
-    isScanningFaces = true;
-    try{
-      const detections = await faceapi
-        .detectAllFaces(video, new faceapi.TinyFaceDetectorOptions({ inputSize:224, scoreThreshold:0.5 }))
-        .withFaceLandmarks()
-        .withFaceDescriptors();
-
-      const threshold = Number(faceSlider.value)/100;
-      const cooldownMs = Number(cdSlider.value) * 1000;
-      const now = performance.now();
-      const boxes = [];
-
-      detections.forEach(d=>{
-        const { athlete, distance } = matchFace(d.descriptor);
-        const matched = athlete && distance < threshold;
-        boxes.push({ box: d.detection.box, label: matched ? athlete.name : '?', color: matched ? athlete.color : '#ff4438' });
-        if(matched && autoMode){
-          const lastAt = athlete.lastAutoCountAt || 0;
-          if(now - lastAt > cooldownMs){
-            athlete.lastAutoCountAt = now;
-            const photo = capturePhoto();
-            lapForAthlete(athlete, 'face-auto', { photo, wallTime: new Date(), confirmedFace:true, faceDistance: distance });
-          }
-        }
-      });
-      lastFaceBoxes = boxes;
-    }catch(e){ /* ignore — this is a background aid, never blocks the app */ }
-    isScanningFaces = false;
-  }
-
-  // แปลงตัวอย่างใบหน้าให้เป็นรูปแบบเดียวกันเสมอ {descriptor, photo}
-  // (รองรับข้อมูลเก่าที่เคยเก็บเป็น array ดิบๆ ก่อนมีฟีเจอร์เก็บรูปตัวอย่าง)
-  function normalizeFaceSample(s){
-    if(Array.isArray(s)) return { descriptor: s, photo: null };
-    return s;
-  }
-
-  // ลงทะเบียนใบหน้าให้นักกีฬาคนหนึ่ง จากเฟรมกล้องปัจจุบัน (ต้องเห็นหน้าชัดๆ ใกล้ๆ)
-  async function tryEnrollFace(a, opts){
-    const silent = opts && opts.silent;
-    if(!faceApiReady){ if(!silent) showToast("AI จดจำใบหน้ายังโหลดไม่เสร็จ ลองอีกครั้งสักครู่"); return; }
-    if(!stream || video.readyState < 2){ if(!silent) showToast("เปิดกล้องก่อนถึงจะลงทะเบียนใบหน้าได้"); return; }
-    if(enrollmentInProgress){ if(!silent) showToast("กำลังลงทะเบียนอยู่ รอสักครู่"); return; }
-    enrollmentInProgress = true;
-    try{
-      const result = await faceapi
-        .detectSingleFace(video, new faceapi.TinyFaceDetectorOptions({ inputSize:320, scoreThreshold:0.5 }))
-        .withFaceLandmarks()
-        .withFaceDescriptor();
-      if(!result){
-        if(!silent) showToast("ไม่เจอใบหน้าชัดเจน — ให้ " + a.name + " หันหน้าเข้ากล้องใกล้ๆ แล้วลองใหม่");
-        return;
-      }
-      const photo = capturePhoto();
-      a.faceDescriptors = a.faceDescriptors || [];
-      a.faceDescriptors.push({ descriptor: Array.from(result.descriptor), photo });
-      if(a.faceDescriptors.length > 5) a.faceDescriptors = a.faceDescriptors.slice(-5); // กันสะสมมากเกินไป (ลบเองได้ในหน้าจัดการใบหน้า)
-      renderAthletes();
-      persistUpdateAthleteFace(a);
-      showToast("ลงทะเบียนใบหน้า " + a.name + " สำเร็จ (" + a.faceDescriptors.length + " ตัวอย่าง)");
-    }catch(e){
-      console.error('ลงทะเบียนใบหน้าไม่สำเร็จ:', e);
-      if(!silent) showToast("ลงทะเบียนใบหน้าไม่สำเร็จ ลองใหม่อีกครั้ง");
-    } finally {
-      enrollmentInProgress = false;
-    }
-  }
-
-  // ---------- หน้าจัดการใบหน้า (ดู/ลบ/ถ่ายเพิ่ม) ----------
-  let faceModalAthleteId = null;
-  const faceModalEl = document.getElementById('faceModal');
-  const faceModalTitleEl = document.getElementById('faceModalTitle');
-  const faceModalGridEl = document.getElementById('faceModalGrid');
-
-  function openFaceModal(a){
-    faceModalAthleteId = a.id;
-    faceModalTitleEl.textContent = "จัดการใบหน้า — " + a.name;
-    renderFaceModalGrid();
-    faceModalEl.classList.add('show');
-  }
-  function closeFaceModal(){
-    faceModalEl.classList.remove('show');
-    faceModalAthleteId = null;
-  }
-  function renderFaceModalGrid(){
-    const a = athletes.find(x=>x.id===faceModalAthleteId);
-    if(!a){ faceModalGridEl.innerHTML=''; return; }
-    const samples = a.faceDescriptors || [];
-    if(!samples.length){
-      faceModalGridEl.innerHTML = '<div class="empty-hint" style="grid-column:1/-1;">ยังไม่มีตัวอย่างใบหน้า — กด "ถ่ายเพิ่ม" ด้านล่าง</div>';
-      return;
-    }
-    faceModalGridEl.innerHTML = samples.map((raw, idx)=>{
-      const s = normalizeFaceSample(raw);
-      const inner = s.photo ? `<img src="${s.photo}">` : `<div class="thumb-empty">👤</div>`;
-      return `<div class="face-thumb">${inner}<button class="del" data-idx="${idx}">✕</button></div>`;
-    }).join('');
-    faceModalGridEl.querySelectorAll('.del').forEach(btn=>{
-      btn.addEventListener('click', ()=>{
-        const a2 = athletes.find(x=>x.id===faceModalAthleteId);
-        if(!a2) return;
-        const idx = Number(btn.dataset.idx);
-        a2.faceDescriptors.splice(idx, 1);
-        renderFaceModalGrid();
-        renderAthletes();
-        persistUpdateAthleteFace(a2);
-      });
-    });
-  }
-  document.getElementById('faceCaptureBtn').addEventListener('click', async ()=>{
-    const a = athletes.find(x=>x.id===faceModalAthleteId);
-    if(!a) return;
-    await tryEnrollFace(a);
-    renderFaceModalGrid();
-  });
-  document.getElementById('faceModalCloseBtn').addEventListener('click', closeFaceModal);
-  faceModalEl.addEventListener('click', (e)=>{ if(e.target===faceModalEl) closeFaceModal(); });
-
-  function drawOverlay(){
-    const ctx = overlay.getContext('2d');
-    const w = overlay.width, h = overlay.height;
-    if(!w||!h) return;
-    ctx.clearRect(0,0,w,h);
-
-    if(!sessionRunning){
-      // ยังไม่กด "เริ่มจับเวลา" — ไม่วาดกรอบใดๆ เพื่อไม่ให้ตีกับตอนลงทะเบียนใบหน้า
-      ctx.fillStyle = 'rgba(0,0,0,0.35)';
-      ctx.fillRect(0, h/2-18, w, 36);
-      ctx.fillStyle = 'rgba(242,241,234,0.95)';
-      ctx.font = '13px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText('กด "เริ่มจับเวลา" เพื่อเริ่มให้ AI จำหน้าและนับรอบ', w/2, h/2+5);
-      ctx.textAlign = 'left';
-      return;
-    }
-
-    if(faceApiReady && lastFaceBoxes.length){
-      const t = getCoverTransform();
-      if(t){
-        lastFaceBoxes.forEach(item=>{
-          const box = item.box;
-          const dx = box.x*t.scale + t.offsetX, dy = box.y*t.scale + t.offsetY;
-          const dw2 = box.width*t.scale, dh2 = box.height*t.scale;
-          ctx.strokeStyle = item.color || 'rgba(255,68,56,0.85)';
-          ctx.lineWidth = 2;
-          ctx.strokeRect(dx, dy, dw2, dh2);
-          ctx.font = '11px sans-serif';
-          ctx.fillStyle = item.color || 'rgba(255,68,56,0.85)';
-          ctx.fillText(item.label || '?', dx+3, Math.max(11, dy-4));
-        });
-      }
-    }
-  }
 
   // ---------- session timer ----------
   function tickTimer(){
@@ -541,9 +386,6 @@
       sessionStart = performance.now();
       startBtn.textContent = "หยุดชั่วคราว";
       startBtn.classList.remove('btn-primary'); startBtn.classList.add('btn-ghost','active');
-      // เริ่มตรวจจับใหม่แบบสะอาด กันของเก่าตอนตั้งกล้อง/ลงทะเบียนใบหน้าทำให้นับพลาดจังหวะแรก
-      lastFaceScanTime = 0;
-      lastFaceBoxes = [];
       athletes.forEach(a=>{ a.lastAutoCountAt = 0; });
       tickTimer();
     } else {
@@ -551,7 +393,6 @@
       sessionElapsed += performance.now()-sessionStart;
       startBtn.textContent = "เริ่มต่อ";
       cancelAnimationFrame(timerRAF);
-      lastFaceBoxes = [];
     }
   });
   resetBtn.addEventListener('click', async ()=>{
@@ -576,12 +417,10 @@
     if(!name) return;
     const id = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : 'a-'+Date.now()+'-'+Math.random().toString(16).slice(2);
     const color = COLORS[athletes.length % COLORS.length];
-    const a = { id, name, color, count:0, laps:[], faceDescriptors:[], lastAutoCountAt:0 };
+    const a = { id, name, color, count:0, laps:[], nfcSerial:null, lastAutoCountAt:0 };
     athletes.push(a);
     renderAthletes();
     persistAddAthlete(a);
-    // ลองลงทะเบียนใบหน้าอัตโนมัติถ้ากล้องเปิดอยู่และเห็นหน้าคนนั้นชัดเจน (ให้หันหน้าเข้ากล้องก่อนกด "+ เพิ่ม")
-    tryEnrollFace(a, { silent:true });
   }
   addBtn.addEventListener('click', ()=>{ addAthlete(nameInput.value); nameInput.value=''; nameInput.focus(); });
   nameInput.addEventListener('keydown', e=>{ if(e.key==='Enter'){ addAthlete(nameInput.value); nameInput.value=''; } });
@@ -601,7 +440,7 @@
     a.count++;
     const lapObj = {t, split, wallTime, photo, dbId:null};
     a.laps.push(lapObj);
-    const logObj = { time:t, athleteName:a.name, lapNo:a.count, split, source:sourceLabel, wallTime, photo, confirmedFace: !!(capture && capture.confirmedFace), dbId:null };
+    const logObj = { time:t, athleteName:a.name, lapNo:a.count, split, source:sourceLabel, wallTime, photo, dbId:null };
     logEntries.push(logObj);
     renderAthletes(a.id);
     renderLog();
@@ -636,32 +475,38 @@
       const el = document.createElement('div');
       el.className = 'athlete' + (flashId===a.id ? ' flash' : '');
       const lastSplit = a.laps.length ? fmtTime(a.laps[a.laps.length-1].split) : '—';
-      const hasFace = a.faceDescriptors && a.faceDescriptors.length;
-      const faceBadge = hasFace
-        ? `<span class="face-badge on">●จำหน้าแล้ว (${a.faceDescriptors.length})</span>`
-        : `<span class="face-badge off">●ยังไม่จำหน้า</span>`;
+      const nfcBadge = a.nfcSerial
+        ? `<span class="nfc-badge on">●มีแท็กแล้ว<span class="clear-tag" data-clear="${a.id}">(ล้าง)</span></span>`
+        : `<span class="nfc-badge off">●ยังไม่มีแท็ก</span>`;
       el.innerHTML = `
         <div class="swatch" style="background:${a.color}"></div>
         <div class="info">
           <div class="name">${escapeHtml(a.name)}</div>
-          <div class="split tabular">รอบล่าสุด ${lastSplit} · ${faceBadge}</div>
+          <div class="split tabular">รอบล่าสุด ${lastSplit} · ${nfcBadge}</div>
         </div>
         <div>
           <div class="count tabular" style="color:${a.color}">${a.count}</div>
           <div class="count-label">รอบ</div>
         </div>
         <div class="actions">
-          <button class="btn-ghost btn-face" data-id="${a.id}" title="จัดการใบหน้า">📷</button>
+          <button class="btn-ghost btn-nfc" data-id="${a.id}" title="ลงทะเบียนแท็ก NFC">🏷️</button>
           <button class="btn-ghost btn-plus" data-id="${a.id}">+1</button>
           <button class="btn-ghost btn-minus" data-id="${a.id}">−1</button>
           <button class="btn-ghost btn-del" data-id="${a.id}">✕</button>
         </div>`;
       athleteListEl.appendChild(el);
     });
-    athleteListEl.querySelectorAll('.btn-face').forEach(b=>{
+    athleteListEl.querySelectorAll('.btn-nfc').forEach(b=>{
       b.addEventListener('click', ()=>{
         const a = athletes.find(x=>x.id==b.dataset.id);
-        if(a) openFaceModal(a);
+        if(a) beginEnrollTag(a);
+      });
+    });
+    athleteListEl.querySelectorAll('.clear-tag').forEach(el=>{
+      el.addEventListener('click', (e)=>{
+        e.stopPropagation();
+        const a = athletes.find(x=>x.id===el.dataset.clear);
+        if(a) clearTag(a);
       });
     });
     athleteListEl.querySelectorAll('.btn-plus').forEach(b=>{
@@ -729,7 +574,7 @@
       div.innerHTML = `
         ${thumbHtml}
         <div class="meta">
-          <div class="top">${escapeHtml(entry.athleteName)} ${entry.lapNo!=='-'?'· รอบ '+entry.lapNo:''} ${entry.confirmedFace?'<span style="color:var(--lane-green)">✓จำหน้า</span>':''}</div>
+          <div class="top">${escapeHtml(entry.athleteName)} ${entry.lapNo!=='-'?'· รอบ '+entry.lapNo:''}</div>
           <div class="bottom">${wt} · เวลาแข่ง ${fmtTime(entry.time)}</div>
         </div>
         <div class="split-badge tabular">${entry.split? fmtTime(entry.split):''}</div>`;
@@ -846,6 +691,7 @@
   // ---------- init ----------
   (async function init(){
     initSupabase();
+    setNfcStatus(false);
     await loadState();
     renderAthletes();
     renderLog();

@@ -12,13 +12,16 @@ create table if not exists athletes (
   session_id text not null,
   name text not null,
   color text not null,
-  face_descriptors jsonb not null default '[]'::jsonb, -- ตัวอย่างใบหน้าที่ลงทะเบียนไว้ (สูงสุด 3 ตัวอย่าง/คน)
+  nfc_serial text,           -- หมายเลขซีเรียลของแท็ก NTAG213 ที่ผูกกับนักกีฬาคนนี้ (ใช้แทนใบหน้าแล้ว)
+  face_descriptors jsonb not null default '[]'::jsonb, -- (เลิกใช้แล้ว — เก็บไว้เผื่อยังมีข้อมูลเก่า)
   created_at timestamptz not null default now()
 );
 create index if not exists athletes_session_id_idx on athletes (session_id);
+create unique index if not exists athletes_nfc_serial_idx on athletes (session_id, nfc_serial) where nfc_serial is not null;
 
--- ถ้าเคยสร้างตาราง athletes ไว้ก่อนหน้านี้แล้ว (ไม่มีคอลัมน์ face_descriptors) ให้รันบรรทัดนี้เพิ่ม:
+-- ถ้าเคยสร้างตาราง athletes ไว้ก่อนหน้านี้แล้ว ให้รันบรรทัดนี้เพิ่ม (ปลอดภัย รันซ้ำได้):
 alter table athletes add column if not exists face_descriptors jsonb not null default '[]'::jsonb;
+alter table athletes add column if not exists nfc_serial text;
 
 -- บันทึกทุกครั้งที่นับรอบ (ทั้งแบบมีนักกีฬาและแบบไม่ระบุ)
 create table if not exists laps (

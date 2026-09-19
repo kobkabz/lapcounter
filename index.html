@@ -159,10 +159,19 @@
 
   .empty-hint{ color:var(--text-muted); font-size:12.5px; text-align:center; padding:14px 4px; }
 
-  .face-badge{ font-size:10px; font-weight:700; }
-  .face-badge.on{ color:var(--lane-green); }
-  .face-badge.off{ color:var(--warn-amber); }
-  .athlete .actions button.btn-face{ font-size:14px; }
+  .nfc-badge{ font-size:10px; font-weight:700; }
+  .nfc-badge.on{ color:var(--lane-green); }
+  .nfc-badge.off{ color:var(--warn-amber); }
+  .nfc-badge .clear-tag{ margin-left:4px; color:var(--track-red); cursor:pointer; font-weight:400; }
+  .athlete .actions button.btn-nfc{ font-size:14px; }
+
+  .nfc-status{
+    display:flex; align-items:center; gap:8px; padding:10px 12px; margin-bottom:10px;
+    background:var(--surface-2); border:1px solid var(--line); border-radius:10px; font-size:12.5px;
+  }
+  .nfc-dot{ width:10px; height:10px; border-radius:50%; background:var(--text-muted); flex:none; }
+  .nfc-dot.scanning{ background:var(--lane-green); animation:nfcPulse 1.2s ease-in-out infinite; }
+  @keyframes nfcPulse{ 0%,100%{ opacity:1; box-shadow:0 0 0 0 rgba(61,220,132,.5);} 50%{ opacity:.6; box-shadow:0 0 0 6px rgba(61,220,132,0);} }
 
   /* stats table */
   .stats-table{ width:100%; border-collapse:collapse; font-size:12.5px; }
@@ -225,23 +234,6 @@
   #lightbox .lb-caption span{ color:var(--text-muted); font-size:11.5px; display:block; margin-top:2px; }
   #lightbox .lb-close{ margin:14px auto 0; display:block; background:var(--surface-2); border:1px solid var(--line); color:var(--lane-white); }
 
-  #faceModal{
-    position:fixed; inset:0; background:rgba(10,12,13,.78); backdrop-filter:blur(3px);
-    display:none; align-items:flex-end; justify-content:center; z-index:110;
-  }
-  #faceModal.show{ display:flex; }
-  #faceModal .modal-sheet{ max-height:85vh; overflow-y:auto; }
-  .face-thumb-grid{ display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin-top:8px; }
-  .face-thumb{ position:relative; }
-  .face-thumb img, .face-thumb .thumb-empty{
-    width:100%; aspect-ratio:1; object-fit:cover; border-radius:8px; border:1px solid var(--line);
-    background:var(--surface-3); display:flex; align-items:center; justify-content:center; font-size:22px;
-  }
-  .face-thumb button.del{
-    position:absolute; top:4px; right:4px; background:rgba(0,0,0,.65); color:#fff; border:none;
-    border-radius:50%; width:22px; height:22px; font-size:12px; padding:0; line-height:1;
-  }
-
   .toast{
     position:fixed; left:50%; top:14px; transform:translateX(-50%) translateY(-60px);
     background:var(--surface-2); border:1px solid var(--line); color:var(--lane-white);
@@ -257,7 +249,7 @@
 <header>
   <div class="eyebrow">Stopwatch · Finish Line</div>
   <h1>นับรอบการวิ่ง</h1>
-  <div class="sub">ตั้งมือถือนิ่งให้เห็นตัวนักวิ่ง — AI จำหน้าแล้วนับรอบให้อัตโนมัติ ไม่ต้องมีเส้นชัย</div>
+  <div class="sub">แตะแท็ก NFC ของนักกีฬาเพื่อนับรอบอัตโนมัติ — รองรับเฉพาะ Android + Chrome/Samsung Internet</div>
   <div class="sub sync-status" id="syncStatus"></div>
   <div class="sub" style="display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-top:6px;">
     <span>รหัสทีม:</span>
@@ -269,36 +261,43 @@
 
 <main>
 
-  <!-- CAMERA -->
+  <!-- NFC -->
   <div class="card">
-    <h2><span class="dot"></span>กล้อง — AI จดจำใบหน้า</h2>
-    <div class="viewfinder" id="viewfinder">
-      <video id="video" playsinline autoplay muted></video>
-      <canvas class="overlay" id="overlay"></canvas>
-      <div class="placeholder" id="placeholder">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4">
-          <path d="M4 8a2 2 0 0 1 2-2h2l1.2-1.6A1 1 0 0 1 10 4h4a1 1 0 0 1 .8.4L16 6h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8Z"/>
-          <circle cx="12" cy="12.5" r="3.4"/>
-        </svg>
-        <span>ยังไม่ได้เปิดกล้อง</span>
-      </div>
+    <h2><span class="dot"></span>แท็ก NFC — ตัวนับหลัก</h2>
+    <div class="sub" style="margin-bottom:10px;">แตะแท็ก NTAG213 ของนักกีฬาที่ด้านหลังโทรศัพท์เพื่อนับรอบ ไม่ต้องมีกล้อง/เส้นชัย</div>
+    <div class="sub" id="nfcSupportWarning" style="display:none; color:var(--warn-amber); margin-bottom:10px;"></div>
+
+    <div class="nfc-status" id="nfcStatusBox">
+      <span class="nfc-dot" id="nfcDot"></span>
+      <span id="nfcStatusText">ยังไม่ได้เริ่มสแกน</span>
     </div>
 
     <div class="cam-controls">
-      <button class="btn-primary btn-block" id="camBtn">เปิดกล้อง</button>
-      <button class="btn-ghost" id="switchBtn" style="display:none">สลับกล้อง</button>
-      <button class="btn-ghost" id="autoBtn" style="display:none">นับอัตโนมัติ: เปิด</button>
+      <button class="btn-primary btn-block" id="nfcToggleBtn">📡 เริ่มสแกน NFC</button>
     </div>
-    <div class="sub" id="modelStatus" style="margin-top:8px; display:none;"></div>
 
-    <div class="slider-row" id="cdRow" style="display:none">
+    <div class="slider-row" id="cdRow" style="margin-top:14px;">
       <label>เว้นระยะขั้นต่ำต่อรอบ (วินาที) <b id="cdVal">8s</b></label>
       <input type="range" id="cdSlider" min="2" max="60" value="8">
     </div>
-    <div class="slider-row" id="faceRow" style="display:none">
-      <label>ความเข้มงวดการจดจำใบหน้า <b id="faceVal">55</b></label>
-      <input type="range" id="faceSlider" min="40" max="75" value="55">
-    </div>
+
+    <details style="margin-top:14px;">
+      <summary style="cursor:pointer; font-size:12.5px; color:var(--text-muted);">📷 กล้อง (ไม่บังคับ — ถ่ายภาพประกอบทุกรอบเท่านั้น ไม่เกี่ยวกับการนับ)</summary>
+      <div class="viewfinder" id="viewfinder" style="margin-top:10px;">
+        <video id="video" playsinline autoplay muted></video>
+        <div class="placeholder" id="placeholder">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4">
+            <path d="M4 8a2 2 0 0 1 2-2h2l1.2-1.6A1 1 0 0 1 10 4h4a1 1 0 0 1 .8.4L16 6h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8Z"/>
+            <circle cx="12" cy="12.5" r="3.4"/>
+          </svg>
+          <span>ยังไม่ได้เปิดกล้อง</span>
+        </div>
+      </div>
+      <div class="cam-controls">
+        <button class="btn-ghost btn-block" id="camBtn">เปิดกล้อง</button>
+        <button class="btn-ghost" id="switchBtn" style="display:none">สลับกล้อง</button>
+      </div>
+    </details>
   </div>
 
   <!-- SESSION TIMER -->
@@ -359,19 +358,6 @@
     <img id="lbImg" src="">
     <div class="lb-caption" id="lbCaption"></div>
     <button class="lb-close btn-ghost" id="lbClose">ปิด</button>
-  </div>
-</div>
-
-<!-- FACE MANAGE MODAL -->
-<div id="faceModal">
-  <div class="modal-sheet">
-    <h3 id="faceModalTitle">จัดการใบหน้า</h3>
-    <p>ตัวอย่างใบหน้าที่ลงทะเบียนไว้ — กด ✕ เพื่อลบตัวอย่างที่ไม่ชัด/ไม่ตรง</p>
-    <div class="face-thumb-grid" id="faceModalGrid"></div>
-    <div class="cam-controls" style="margin-top:14px;">
-      <button class="btn-primary btn-block" id="faceCaptureBtn">📷 ถ่ายเพิ่ม</button>
-      <button class="btn-ghost" id="faceModalCloseBtn">ปิด</button>
-    </div>
   </div>
 </div>
 
